@@ -1,0 +1,6 @@
+.theos
+packages
+.DS_Store
+Makefile.local
+.toolchain/
+HANDOFF.md
