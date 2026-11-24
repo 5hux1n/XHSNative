@@ -45,12 +45,12 @@ jobs:
           xcodebuild -version | tee "$RUNNER_TEMP/xcode-version"
           grep -Eq '^Xcode 27([.]|$)' "$RUNNER_TEMP/xcode-version"
           make -j"$(sysctl -n hw.ncpu)" TARGET_CODESIGN=codesign TARGET_CODESIGN_FLAGS="-s -"
-          xcrun lipo packages/XHSNative.dylib -verify_arch arm64
+          xcrun lipo packages/XHSNative-*.dylib -verify_arch arm64
 
       - uses: actions/upload-artifact@v4
         with:
           name: XHSNative
-          path: packages/XHSNative.dylib
+          path: packages/XHSNative-*.dylib
           if-no-files-found: error
 
   release:
@@ -70,8 +70,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
+          file="XHSNative-${TAG#v}.dylib"
+          test -f "$file"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" XHSNative.dylib --clobber
+            gh release upload "$TAG" "$file" --clobber
           else
-            gh release create "$TAG" XHSNative.dylib --verify-tag --title "$TAG" --generate-notes
+            gh release create "$TAG" "$file" --verify-tag --title "$TAG" --generate-notes
           fi

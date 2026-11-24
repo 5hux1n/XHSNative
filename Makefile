@@ -14,6 +14,7 @@ export DEBUG = 0
 include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = XHSNative
+RELEASE_VERSION := $(shell awk -F'"' '/define XHSNativeVersion / {sub(/[^0-9.].*/, "", $$2); print $$2}' XHSNative.xm)
 
 XHSNative_FILES = XHSNative.xm
 XHSNative_CFLAGS = -fobjc-arc -w
@@ -26,8 +27,8 @@ include $(THEOS_MAKE_PATH)/library.mk
 # 产物放到 packages 目录
 after-all::
 	@mkdir -p packages
-	@cp $(THEOS_OBJ_DIR)/$(LIBRARY_NAME).dylib packages/
-	@echo -e "\033[32m==>\033[0m packages/$(LIBRARY_NAME).dylib"
+	@cp $(THEOS_OBJ_DIR)/$(LIBRARY_NAME).dylib packages/$(LIBRARY_NAME)-$(RELEASE_VERSION).dylib
+	@echo -e "\033[32m==>\033[0m packages/$(LIBRARY_NAME)-$(RELEASE_VERSION).dylib"
 
 clean::
 	@rm -rf .theos packages

@@ -20,7 +20,7 @@
 make
 ```
 
-产物在 `packages/XHSNative.dylib`。
+产物在 `packages/XHSNative-<版本号>.dylib`。
 
 ## 声明与许可
 
