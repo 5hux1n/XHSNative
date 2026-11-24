@@ -14,7 +14,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-#define XHSNativeVersion @"1.0(11242330)"
+#define XHSNativeVersion @"1.1(11250037)"
 
 @interface XYTabbarController : UITabBarController
 - (UIControl *)centerButton;
@@ -31,6 +31,7 @@
 @end
 
 @interface XYMHomeNaviBar : UIView
+- (UIImageView *)background;
 @end
 
 @interface XYMHomeLayoutAdapter : NSObject
@@ -91,6 +92,14 @@
 @end
 
 @interface XYNoteDetailPage : UIViewController
+@end
+
+@interface XYLottieAnimationButton : UIButton
+- (UIView *)lottieMaskView;
+@end
+
+@interface XYNoteInteractionView : UIView
+- (XYLottieAnimationButton *)likeButton;
 @end
 
 @interface XYNoteDirectionView : UIView
@@ -297,6 +306,8 @@ static void rebuildTabs(void) {
     }
     gRebuilding = YES;
     [controller setTabs:tabs animated:NO];
+    // 旧栏保留给发布和角标使用。其他插件可能在布局时重新显示它。
+    if (pageTab(@"index")) controller.customtabBar.alpha = 0;
     UITab *restored = selected ? pageTab(selected) : nil;
     if (restored) controller.selectedTab = restored;
     controller.tabBarMinimizeBehavior = prefBool(kMinimize, YES) ? UITabBarMinimizeBehaviorOnScrollDown : UITabBarMinimizeBehaviorNever;
@@ -379,7 +390,7 @@ static BOOL isOurBar(UITabBar *bar) {
 - (void)viewDidLayoutSubviews {
     %orig;
     UIView *legacy = [self customtabBar];
-    if (!legacy.hidden) legacy.hidden = YES;
+    if (legacy.alpha > 0 && pageTab(@"index")) legacy.alpha = 0;
     if (gTabsDirty && !self.isTabBarHidden) rebuildTabs();
 }
 
@@ -557,12 +568,19 @@ static void attachVisibleList(void) {
     if (list) attachHomeBar(list);
 }
 
-// 顶栏自己有一层通栏的磨砂底，「关注」这类页面会把它显示出来。它靠 hidden 开关，这里改 alpha，互不干扰
-static void stripBarBackground(UIView *bar) {
+// 主题图、分隔线和通栏磨砂各是一层，主题图的高度会按图片比例变化。
+static void stripBarBackground(XYMHomeNaviBar *bar) {
+    clearBackground(bar);
+    UIView *theme = [bar respondsToSelector:@selector(background)] ? bar.background : nil;
     for (UIView *view in bar.subviews) {
-        if (view.subviews.count > 2 || !CGRectEqualToRect(view.frame, bar.bounds)) continue;
-        if (![view isMemberOfClass:UIView.class] && ![view isMemberOfClass:UIVisualEffectView.class]) continue;
-        if (view.alpha != 0) view.alpha = 0;
+        if (view.alpha == 0) continue;
+        BOOL fullWidth = CGRectGetWidth(bar.bounds) > 0 &&
+                         fabs(CGRectGetMinX(view.frame) - CGRectGetMinX(bar.bounds)) < 1 &&
+                         fabs(CGRectGetWidth(view.frame) - CGRectGetWidth(bar.bounds)) < 1;
+        BOOL backdrop = fullWidth && view.subviews.count <= 2 &&
+            ([view isMemberOfClass:UIVisualEffectView.class] ||
+             ([view isMemberOfClass:UIView.class] && (!view.userInteractionEnabled || CGRectEqualToRect(view.frame, bar.bounds))));
+        if (view == theme || backdrop || (fullWidth && [view isKindOfClass:%c(_XYSeparatorView)])) view.alpha = 0;
     }
 }
 
@@ -612,6 +630,11 @@ static void stripBarBackground(UIView *bar) {
 %end
 
 %hook XYMHomeNaviBar
+
+- (void)homeThemeChanged {
+    %orig;
+    stripBarBackground(self);
+}
 
 - (void)setIndex:(NSInteger)index {
     %orig;
@@ -962,7 +985,7 @@ static void layoutNoteTop(UIView *bar) {
 
 static void layoutNoteBottom(UIView *bar) {
     clearBackground(bar);
-    UIView *content = subviewOfClass(bar, @"XYNoteModule.InteractionView");
+    XYNoteInteractionView *content = (id)subviewOfClass(bar, @"XYNoteModule.InteractionView");
     if (!content) return;
     clearBackground(content);
     UIView *stack = nil;
@@ -973,6 +996,10 @@ static void layoutNoteBottom(UIView *bar) {
         else if (!view.subviews.count && CGRectGetHeight(view.frame) > 0 && CGRectGetHeight(view.frame) <= 1 && !view.hidden) view.hidden = YES;
     }
     if (CGRectGetHeight(stack.frame) <= 1) return;
+    // 点赞动画单独绘制，图标上原本有一块与页面同色的方形遮底。
+    XYLottieAnimationButton *like = [content respondsToSelector:@selector(likeButton)] ? content.likeButton : nil;
+    UIView *mask = [like respondsToSelector:@selector(lottieMaskView)] ? like.lottieMaskView : nil;
+    if (mask && mask.superview == like.imageView && !mask.subviews.count && mask.alpha != 0) mask.alpha = 0;
     // 评论框自带的灰色药丸底去掉，和旁边的按钮一样直接放在玻璃上
     for (UIView *group in stack.subviews)
         for (UIView *field in group.subviews)
