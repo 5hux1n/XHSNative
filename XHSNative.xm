@@ -14,7 +14,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-#define XHSNativeVersion @"1.1(11250037)"
+#define XHSNativeVersion @"1.2(11250055)"
 
 @interface XYTabbarController : UITabBarController
 - (UIControl *)centerButton;
@@ -277,6 +277,14 @@ static UITab *pageTab(NSString *name) {
 static BOOL gTabsDirty;
 static UIViewController *gSearchPage;  // 搜索标签挂的空页面，它不会真的显示
 
+static BOOL nativeItemEnabled(UITabBarItem *item) {
+    if (gSearchPage && item == gSearchPage.tabBarItem) return YES;
+    for (NSUInteger i = 0; i < gPages.count; i++) {
+        if (item == gPages[i].tabBarItem) return pageTab(gPageNames[i]).enabled;
+    }
+    return NO;
+}
+
 static void rebuildTabs(void) {
     XYTabbarController *controller = gTabBarController;
     if (!controller || !gPages.count) return;
@@ -306,6 +314,9 @@ static void rebuildTabs(void) {
     }
     gRebuilding = YES;
     [controller setTabs:tabs animated:NO];
+    for (UITabBarItem *item in controller.tabBar.items) {
+        if (!item.enabled && nativeItemEnabled(item)) item.enabled = YES;
+    }
     // 旧栏保留给发布和角标使用。其他插件可能在布局时重新显示它。
     if (pageTab(@"index")) controller.customtabBar.alpha = 0;
     UITab *restored = selected ? pageTab(selected) : nil;
@@ -363,11 +374,11 @@ static BOOL isOurBar(UITabBar *bar) {
 
 %end
 
-// 小红书同步底栏时会把它认不出的标签项一律禁用，搜索那一格因此点不动
+// UIKit 开始拖动前会检查 UITabBarItem，即使对应的 UITab 仍是启用状态。
 %hook UITabBarItem
 
 - (void)setEnabled:(BOOL)enabled {
-    %orig(enabled || (gSearchPage && self == gSearchPage.tabBarItem));
+    %orig(enabled || nativeItemEnabled(self));
 }
 
 %end
@@ -453,6 +464,11 @@ static BOOL isOurBar(UITabBar *bar) {
 %end
 
 %hook XYPHHomeTabbarController
+
+- (id<UIViewControllerAnimatedTransitioning>)tabBarController:(UITabBarController *)controller animationControllerForTransitionFromViewController:(UIViewController *)from toViewController:(UIViewController *)to {
+    if (controller == self && pageTab(@"index")) return nil;
+    return %orig;
+}
 
 %new
 - (BOOL)tabBarController:(UITabBarController *)controller shouldSelectTab:(UITab *)tab {
