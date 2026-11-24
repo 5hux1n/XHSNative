@@ -14,9 +14,9 @@ export DEBUG = 0
 include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = XHSNative
-RELEASE_VERSION := $(shell awk -F'"' '/define XHSNativeVersion / {sub(/[^0-9.].*/, "", $$2); print $$2}' XHSNative.xm)
+RELEASE_VERSION := $(shell awk -F'"' '/define XHSNativeVersion / {sub(/[^0-9.].*/, "", $$2); print $$2}' XHSNativeConfig.h)
 
-XHSNative_FILES = XHSNative.xm
+XHSNative_FILES = XHSNative.xm XHSNativeHelper.m XHSNativeConfig.m
 XHSNative_CFLAGS = -fobjc-arc -w
 XHSNative_STRIP_FLAGS = -x
 XHSNative_FRAMEWORKS = UIKit
