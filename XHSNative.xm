@@ -14,11 +14,17 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 
-#define XHSNativeVersion @"1.2(11250055)"
+#define XHSNativeVersion @"1.3(11250144)"
 
 @interface XYTabbarController : UITabBarController
 - (UIControl *)centerButton;
 - (UIView *)customtabBar;
+- (NSDictionary<NSNumber *, NSString *> *)badgeValueDict;
+- (void)setBadgeValue:(NSString *)value forItemAtIndex:(NSInteger)index;
+@end
+
+@interface UITabBarItem (XHSBadge)
+- (void)_updateViewBadge;
 @end
 
 @interface XYPHHomeTabbarController : XYTabbarController <UITabBarControllerDelegate>
@@ -277,6 +283,14 @@ static UITab *pageTab(NSString *name) {
 static BOOL gTabsDirty;
 static UIViewController *gSearchPage;  // 搜索标签挂的空页面，它不会真的显示
 
+static NSArray<NSString *> *legacyTabNames(XYTabbarController *controller) {
+    return [[controller.customtabBar valueForKey:@"tabs"] valueForKey:@"itemName"];
+}
+
+static void refreshBadge(UITabBarItem *item) {
+    if ([item respondsToSelector:@selector(_updateViewBadge)]) [item _updateViewBadge];
+}
+
 static BOOL nativeItemEnabled(UITabBarItem *item) {
     if (gSearchPage && item == gSearchPage.tabBarItem) return YES;
     for (NSUInteger i = 0; i < gPages.count; i++) {
@@ -295,13 +309,15 @@ static void rebuildTabs(void) {
     // 每次都建新的标签对象：沿用旧对象重排的话，系统会把留下来的那几个画成灰的
     NSString *selected = controller.selectedTab.identifier;
     NSMutableArray<UITab *> *tabs = [NSMutableArray array];
+    NSArray *legacyNames = legacyTabNames(controller);
     for (NSString *name in tabOrder()) {
         NSUInteger index = [gPageNames indexOfObject:name];
         if (index == NSNotFound || tabHidden(name)) continue;
         UIViewController *page = gPages[index];
         UITab *tab = [[UITab alloc] initWithTitle:@"" image:tabIcon(name, NO) identifier:name viewControllerProvider:^UIViewController *(UITab *t) { return page; }];
         if ([tab respondsToSelector:@selector(setSelectedImage:)]) [(id)tab setSelectedImage:tabIcon(name, YES)];
-        tab.badgeValue = pageTab(name).badgeValue;
+        NSUInteger badgeIndex = [legacyNames indexOfObject:name];
+        tab.badgeValue = (legacyNames && badgeIndex != NSNotFound) ? controller.badgeValueDict[@(badgeIndex)] : pageTab(name).badgeValue;
         [tabs addObject:tab];
     }
     if (prefBool(kSearchTab, YES)) {
@@ -316,6 +332,7 @@ static void rebuildTabs(void) {
     [controller setTabs:tabs animated:NO];
     for (UITabBarItem *item in controller.tabBar.items) {
         if (!item.enabled && nativeItemEnabled(item)) item.enabled = YES;
+        if (item.badgeValue) refreshBadge(item);
     }
     // 旧栏保留给发布和角标使用。其他插件可能在布局时重新显示它。
     if (pageTab(@"index")) controller.customtabBar.alpha = 0;
@@ -446,14 +463,14 @@ static BOOL isOurBar(UITabBar *bar) {
 }
 
 // 角标的下标是按它自己那条底栏算的，中间还夹着加号，所以按名字找回对应的标签
-- (void)setBadgeValue:(id)value forItemAtIndex:(NSInteger)index {
+- (void)setBadgeValue:(NSString *)value forItemAtIndex:(NSInteger)index {
     %orig;
-    NSArray *legacy = [[self customtabBar] valueForKey:@"tabs"];
-    if (index < 0 || index >= (NSInteger)legacy.count) return;
-    id item = legacy[index];
-    NSString *name = [item respondsToSelector:NSSelectorFromString(@"itemName")] ? [item valueForKey:@"itemName"] : nil;
-    UITab *tab = name ? pageTab(name) : nil;
-    tab.badgeValue = ([value isKindOfClass:NSString.class] && [value length]) ? value : nil;
+    NSArray *names = legacyTabNames(self);
+    if (self != gTabBarController || index < 0 || index >= (NSInteger)names.count) return;
+    UITab *tab = pageTab(names[index]);
+    if (!tab) return;
+    tab.badgeValue = value;
+    refreshBadge(tab.viewController.tabBarItem);
 }
 
 - (void)setCustomTabBarHidden:(BOOL)hidden animated:(BOOL)animated {
@@ -464,6 +481,18 @@ static BOOL isOurBar(UITabBar *bar) {
 %end
 
 %hook XYPHHomeTabbarController
+
+- (void)showBadgeWithValue:(NSString *)value forTabBarId:(NSString *)name {
+    if (self == gTabBarController && pageTab(@"index") && name.length) {
+        NSArray *names = legacyTabNames(self);
+        NSUInteger index = [names indexOfObject:name];
+        if (names && index != NSNotFound) {
+            [self setBadgeValue:value forItemAtIndex:index];
+            return;
+        }
+    }
+    %orig;
+}
 
 - (id<UIViewControllerAnimatedTransitioning>)tabBarController:(UITabBarController *)controller animationControllerForTransitionFromViewController:(UIViewController *)from toViewController:(UIViewController *)to {
     if (controller == self && pageTab(@"index")) return nil;
