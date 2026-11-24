@@ -18,6 +18,7 @@ RELEASE_VERSION := $(shell awk -F'"' '/define XHSNativeVersion / {sub(/[^0-9.].*
 
 XHSNative_FILES = XHSNative.xm
 XHSNative_CFLAGS = -fobjc-arc -w
+XHSNative_STRIP_FLAGS = -x
 XHSNative_FRAMEWORKS = UIKit
 XHSNative_LDFLAGS = -Wl,-install_name,@rpath/XHSNative.dylib
 XHSNative_LOGOSFLAGS = -c generator=internal

@@ -60,6 +60,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: XHSNative
@@ -72,8 +75,18 @@ jobs:
         run: |
           file="XHSNative-${TAG#v}.dylib"
           test -f "$file"
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v version="${TAG#v}" '
+            /^## / { active = ($2 == version); next }
+            active && NF {
+              if (!found++) print "## 更新日志\n"
+              print
+            }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > "$notes"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$file" --clobber
+            gh release edit "$TAG" --notes-file "$notes"
           else
-            gh release create "$TAG" "$file" --verify-tag --title "$TAG" --generate-notes
+            gh release create "$TAG" "$file" --verify-tag --title "$TAG" --notes-file "$notes"
           fi
