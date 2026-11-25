@@ -14,6 +14,7 @@
 // 开关，默认都是开的
 extern NSString *const kXHSNativeSearchTab;     // 右侧的搜索
 extern NSString *const kXHSNativeSwapPublish;   // 交换搜索与发布：发布去底栏右侧，搜索回到首页顶栏，默认关
+extern NSString *const kXHSNativeDoubleTapZoom; // 双击笔记图片放大，不点赞，默认关
 extern NSString *const kXHSNativeMinimize;      // 滚动时收起底栏
 extern NSString *const kXHSNativeDisableDots;   // 禁用点点 AI，默认关
 extern NSString *const kXHSNativeGlassNote;
@@ -56,6 +57,7 @@ extern NSString *const kXHSNativeBarProfile;
 - (BOOL)boolForKey:(NSString *)key;
 - (BOOL)isDotsDisabled;
 - (BOOL)isPublishSwapped;
+- (BOOL)isDoubleTapZoomEnabled;
 - (void)setBool:(BOOL)value forKey:(NSString *)key;
 
 - (NSArray<NSString *> *)tabOrder;

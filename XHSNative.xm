@@ -517,6 +517,18 @@
 }
 %end
 
+// 双击图片：放大，不点赞
+%hook XYNoteImageView
+- (void)browser:(id)browser doubleClickedAt:(NSInteger)index {
+    if (!XHSNativeConfig.shared.isDoubleTapZoomEnabled) return %orig;
+    [XHSNativeHelper toggleZoomInBrowser:browser];
+}
+- (void)browser:(id)browser indexDidChanged:(NSInteger)index {
+    %orig;
+    [XHSNativeHelper resetZoom];
+}
+%end
+
 // 关注按钮原来是红色描边的小药丸，放进玻璃里显得碎。去掉描边只留字，字稍微加重
 %hook XYFollowBtn
 
@@ -671,6 +683,7 @@
           XYMarketRootInterface = objc_getClass("XYShopping.MarketRootInterface"),
           XYNoteDetailPage = objc_getClass("XYNoteModule.NoteDetailPageInterface"),
           XYNoteDirectionView = objc_getClass("XYNoteModule.NoteDirectionView"),
+          XYNoteImageView = objc_getClass("XYNoteModule.NoteImageView"),
           XYVFHeadView = objc_getClass("XYOldNoteModule.VFHeadView"),
           XYVFBottomEngageView = objc_getClass("XYOldNoteModule.VFBottomEngageView"));
 }

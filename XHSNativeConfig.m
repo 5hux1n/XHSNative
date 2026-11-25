@@ -9,6 +9,7 @@
 
 NSString *const kXHSNativeSearchTab = @"XHSNative.searchTab";
 NSString *const kXHSNativeSwapPublish = @"XHSNative.swapPublish";
+NSString *const kXHSNativeDoubleTapZoom = @"XHSNative.doubleTapZoom";
 NSString *const kXHSNativeMinimize = @"XHSNative.minimize";
 NSString *const kXHSNativeDisableDots = @"XHSNative.disableDots";
 NSString *const kXHSNativeGlassNote = @"XHSNative.glass.note";
@@ -56,6 +57,10 @@ static NSString *const kFillPrefix = @"XHSNative.fill.";
 
 - (BOOL)isPublishSwapped {
     return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeSwapPublish];
+}
+
+- (BOOL)isDoubleTapZoomEnabled {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeDoubleTapZoom];
 }
 
 - (void)setBool:(BOOL)value forKey:(NSString *)key {

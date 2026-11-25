@@ -48,6 +48,103 @@
 
 @end
 
+#pragma mark - 双击放大
+
+// 笔记页图片的双指放大由 PinchController 处理：开始时把图片截下来放到全屏的遮罩上，
+// 跟着手指缩放和移动，松手弹回。双击时喂给它一个假的双指手势，效果和双指放大一样；
+// 放大后盖一层透明的视图接手势：单指拖动、双指继续缩放，点一下松开，用它自己的弹回动画收起
+
+@interface XHSNativeFakePinch : UIPinchGestureRecognizer
+@property (nonatomic) UIGestureRecognizerState fakeState;
+@property (nonatomic) CGFloat fakeScale;
+@property (nonatomic) CGPoint fakePoint;  // 窗口坐标
+@property (nonatomic, weak) UIView *hostView;
+@end
+
+@implementation XHSNativeFakePinch
+
+- (UIGestureRecognizerState)state {
+    return self.fakeState;
+}
+
+- (CGFloat)scale {
+    return self.fakeScale;
+}
+
+- (NSUInteger)numberOfTouches {
+    return 2;
+}
+
+- (UIView *)view {
+    return self.hostView;
+}
+
+- (CGPoint)locationInView:(UIView *)view {
+    return view ? [view convertPoint:self.fakePoint fromView:nil] : self.fakePoint;
+}
+
+@end
+
+@interface XHSNativePinchHold : NSObject
+@property (nonatomic, strong) id controller;
+@property (nonatomic, strong) XHSNativeFakePinch *pinch;
+@property (nonatomic, strong) UIView *catcher;
+@property (nonatomic) CGPoint start;
+@property (nonatomic) CGFloat baseScale;
+@property (nonatomic, strong) CADisplayLink *link;
+@property (nonatomic) CFTimeInterval beginTime;
+@end
+
+static XHSNativePinchHold *gPinchHold;
+static const CGFloat kZoomScale = 2.5;
+
+@implementation XHSNativePinchHold
+
+- (void)send:(UIGestureRecognizerState)state {
+    self.pinch.fakeState = state;
+    [self.controller didReceivePinchWithRecognizer:self.pinch];
+}
+
+- (CGFloat)clampScale:(CGFloat)scale {
+    CGFloat limit = [self.controller maxScale] > 1 ? [self.controller maxScale] : kZoomScale;
+    return MAX(1, MIN(limit, scale));
+}
+
+// 从 1 倍放大到 2.5 倍，和手指张开一样逐帧喂
+- (void)grow:(CADisplayLink *)link {
+    if (!self.beginTime) self.beginTime = link.timestamp;
+    CGFloat progress = MIN(1, (link.timestamp - self.beginTime) / 0.25);
+    CGFloat eased = 1 - pow(1 - progress, 3);
+    self.pinch.fakeScale = [self clampScale:1 + (kZoomScale - 1) * eased];
+    [self send:UIGestureRecognizerStateChanged];
+    if (progress < 1) return;
+    [link invalidate];
+    self.link = nil;
+}
+
+- (void)pan:(UIPanGestureRecognizer *)pan {
+    if (pan.state == UIGestureRecognizerStateBegan) self.start = self.pinch.fakePoint;
+    CGPoint move = [pan translationInView:nil];
+    self.pinch.fakePoint = CGPointMake(self.start.x + move.x, self.start.y + move.y);
+    [self send:UIGestureRecognizerStateChanged];
+}
+
+- (void)zoom:(UIPinchGestureRecognizer *)zoom {
+    if (zoom.state == UIGestureRecognizerStateBegan) self.baseScale = self.pinch.fakeScale;
+    self.pinch.fakeScale = [self clampScale:self.baseScale * zoom.scale];
+    [self send:UIGestureRecognizerStateChanged];
+}
+
+- (void)finish {
+    [self.link invalidate];
+    self.link = nil;
+    [self.catcher removeFromSuperview];
+    [self send:UIGestureRecognizerStateEnded];
+    gPinchHold = nil;
+}
+
+@end
+
 #pragma mark - iOS 27.1 以下
 
 // 首页的下沉布局是按 iOS 27.1 写的，用到三个更早的系统上没有的东西：
@@ -812,6 +909,46 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
     }
 }
 
+// 双击图片：用小红书自己的双指放大，见 XHSNativePinchHold
++ (void)toggleZoomInBrowser:(UIView *)browser {
+    if (gPinchHold) return [gPinchHold finish];
+    id controller = [browser respondsToSelector:@selector(pinchController)] ? [browser pinchController] : nil;
+    if (![controller respondsToSelector:@selector(didReceivePinchWithRecognizer:)] || ![controller installed] || [controller inTransform]) return;
+    UIWindow *window = browser.window;
+    UIGestureRecognizer *real = [controller recognizer];
+    if (!window || !real.view) return;
+
+    XHSNativePinchHold *hold = [XHSNativePinchHold new];
+    hold.controller = controller;
+    hold.pinch = [[XHSNativeFakePinch alloc] initWithTarget:nil action:nil];
+    hold.pinch.hostView = real.view;
+    hold.pinch.fakeScale = 1;
+    // 以点按的位置为中心放大
+    id tap = [browser respondsToSelector:@selector(multiRegesture)] ? [browser multiRegesture] : nil;
+    hold.pinch.fakePoint = [tap isKindOfClass:UIGestureRecognizer.class] ? [(UIGestureRecognizer *)tap locationInView:nil]
+                                                                        : [browser convertPoint:CGPointMake(CGRectGetMidX(browser.bounds), CGRectGetMidY(browser.bounds)) toView:nil];
+    // 开始时它从自己的 recognizer 取位置和手指数，先换成假的
+    [controller setRecognizer:hold.pinch];
+    [hold send:UIGestureRecognizerStateBegan];
+    [controller setRecognizer:real];
+    if (![controller inTransform]) return;
+
+    UIView *catcher = [[UIView alloc] initWithFrame:window.bounds];
+    catcher.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [catcher addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:hold action:@selector(pan:)]];
+    [catcher addGestureRecognizer:[[UIPinchGestureRecognizer alloc] initWithTarget:hold action:@selector(zoom:)]];
+    [catcher addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:hold action:@selector(finish)]];
+    [window addSubview:catcher];
+    hold.catcher = catcher;
+    hold.link = [CADisplayLink displayLinkWithTarget:hold selector:@selector(grow:)];
+    [hold.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    gPinchHold = hold;
+}
+
++ (void)resetZoom {
+    [gPinchHold finish];
+}
+
 #pragma mark - 视频页
 
 // 顶上的按钮按左右分成两个胶囊（返回 + 小窗 / 搜索 + 分享），底部互动栏垫一个胶囊。
@@ -902,8 +1039,9 @@ static void darken(UIVisualEffectView *glass) {
     [rows addObject:row(@"label", rowTitle(@"功能"), @"features.heading")];
     [rows addObject:gap(8)];
     [rows addObject:switchRow(@"禁用点点 AI", config.isDotsDisabled, [@"pref." stringByAppendingString:kXHSNativeDisableDots])];
+    [rows addObject:switchRow(@"双击放大图片", config.isDoubleTapZoomEnabled, [@"pref." stringByAppendingString:kXHSNativeDoubleTapZoom])];
     [rows addObject:gap(8)];
-    [rows addObject:row(@"label", rowTitle(@"禁用点点 AI 后重启小红书生效。"), @"features.note")];
+    [rows addObject:row(@"label", rowTitle(@"禁用点点 AI 后重启小红书生效。\n双击放大的图片，再双击缩回。"), @"features.note")];
     [rows addObject:gap(24)];
 
     [rows addObject:row(@"label", rowTitle(@"液态玻璃"), @"glass.heading")];
