@@ -48,6 +48,29 @@
 
 @end
 
+#pragma mark - 图文笔记页
+
+// 系统的 soft 边缘只画在滚动视图自己的范围里，笔记列表从顶栏下沿才开始，画不到顶栏下面。
+// 在顶栏的位置放一个空的滚动视图替它画：列表停在顶上时，它的内容在栏的下方，系统不显示边缘；
+// 列表一往下滑，就把它的内容挪到栏下面，系统显示边缘
+@interface XHSNativeSoftEdge : UIScrollView
+- (void)follow:(UIScrollView *)list;
+@end
+
+@implementation XHSNativeSoftEdge
+
+- (void)follow:(UIScrollView *)list {
+    BOOL scrolled = list.contentOffset.y > 0.5 - list.adjustedContentInset.top;
+    CGFloat offset = scrolled ? 0 : -self.contentInset.top;
+    if (self.contentOffset.y != offset) self.contentOffset = CGPointMake(0, offset);
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(UIScrollView *)list change:(NSDictionary *)change context:(void *)context {
+    [self follow:list];
+}
+
+@end
+
 #pragma mark - 双击放大
 
 // 笔记页图片的双指放大由 PinchController 处理：开始时把图片截下来放到全屏的遮罩上，
@@ -864,29 +887,35 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
         if ([view isKindOfClass:UICollectionView.class]) list = list ?: (UICollectionView *)view;
     if (!top || !bottom || !list || top.hidden || bottom.hidden) return;
 
-    // 首图沿用导航栏下沿作为起点。滚出列表边界的部分可以透过导航栏看到。
-    CGFloat start = CGRectGetMaxY(top.frame);
-    CGRect viewport = CGRectMake(0, start, CGRectGetWidth(root.bounds), CGRectGetHeight(root.bounds) - start);
-    if (CGRectIsEmpty(viewport)) return;
-    UIEdgeInsets extra = page.additionalSafeAreaInsets;
-    extra.bottom = MAX(0, CGRectGetMaxY(root.bounds) - CGRectGetMinY(bottom.frame) - root.window.safeAreaInsets.bottom);
-    if (!UIEdgeInsetsEqualToEdgeInsets(page.additionalSafeAreaInsets, extra)) page.additionalSafeAreaInsets = extra;
-    if (!CGRectEqualToRect(list.frame, viewport)) list.frame = viewport;
+    // 列表的位置不动，它本来就夹在上下两条栏之间。不裁剪，滚出去的内容就能透过栏看到；
+    // 可见范围往上下扩到屏幕边，栏后面的单元格才不会被回收（否则栏下面会一块块露出底色）
     if (list.clipsToBounds) list.clipsToBounds = NO;
-    if (list.contentInsetAdjustmentBehavior != UIScrollViewContentInsetAdjustmentAlways)
-        list.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentAlways;
+    UIEdgeInsets reach = UIEdgeInsetsMake(-CGRectGetMinY(list.frame), 0, CGRectGetMaxY(list.frame) - CGRectGetMaxY(root.bounds), 0);
+    if ([list respondsToSelector:@selector(_setVisibleRectEdgeInsets:)] && !UIEdgeInsetsEqualToEdgeInsets([list _visibleRectEdgeInsets], reach))
+        [list _setVisibleRectEdgeInsets:reach];
 
-    // 顶部用系统的 soft 边缘；底部不要边缘效果，胶囊直接浮在正文上
-    list.topEdgeEffect.style = UIScrollEdgeEffectStyle.softStyle;
-    if (!list.bottomEdgeEffect.hidden) list.bottomEdgeEffect.hidden = YES;
-    UIScrollEdgeElementContainerInteraction *interaction = objc_getAssociatedObject(top, &kNoteEdgeKey);
-    if (!interaction) {
-        interaction = [UIScrollEdgeElementContainerInteraction new];
+    // 顶栏下面的 soft 边缘，见 XHSNativeSoftEdge；底部不要边缘效果，胶囊直接浮在正文上
+    XHSNativeSoftEdge *edge = objc_getAssociatedObject(list, &kNoteEdgeKey);
+    if (!edge) {
+        edge = [XHSNativeSoftEdge new];
+        edge.userInteractionEnabled = NO;
+        edge.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+        edge.topEdgeEffect.style = UIScrollEdgeEffectStyle.softStyle;
+        UIScrollEdgeElementContainerInteraction *interaction = [UIScrollEdgeElementContainerInteraction new];
         interaction.edge = UIRectEdgeTop;
+        interaction.scrollView = edge;
         [top addInteraction:interaction];
-        objc_setAssociatedObject(top, &kNoteEdgeKey, interaction, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [list addObserver:edge forKeyPath:@"contentOffset" options:0 context:NULL];
+        objc_setAssociatedObject(list, &kNoteEdgeKey, edge, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (interaction.scrollView != list) interaction.scrollView = list;
+    if (edge.superview != root) [root insertSubview:edge belowSubview:top];
+    if (!CGRectEqualToRect(edge.frame, top.frame)) {
+        edge.frame = top.frame;
+        edge.contentSize = top.frame.size;
+        edge.contentInset = UIEdgeInsetsMake(CGRectGetHeight(top.frame), 0, 0, 0);
+    }
+    [edge follow:list];
+    if (!list.bottomEdgeEffect.hidden) list.bottomEdgeEffect.hidden = YES;
 
     [self layoutNoteTop:top];
     [self layoutNoteBottom:bottom];

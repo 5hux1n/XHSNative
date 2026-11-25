@@ -18,6 +18,12 @@
 - (void)_updateViewBadge;
 @end
 
+// 单元格按这个范围决定留不留，负数是比 bounds 往外扩
+@interface UICollectionView (XHSVisibleRect)
+- (UIEdgeInsets)_visibleRectEdgeInsets;
+- (void)_setVisibleRectEdgeInsets:(UIEdgeInsets)insets;
+@end
+
 @interface XYPHHomeTabbarController : XYTabbarController <UITabBarControllerDelegate>
 @end
 
