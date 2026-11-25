@@ -788,20 +788,21 @@ static void darken(UIVisualEffectView *glass) {
     NSMutableArray *rows = [NSMutableArray arrayWithObject:gap(12)];
     [rows addObject:row(@"label", rowTitle(@"底部标签栏"), @"tabs.heading")];
     [rows addObject:gap(8)];
+    // 每组里的行按文字从短到长排
+    for (NSString *name in @[@"me", @"shopping", @"message"])
+        [rows addObject:switchRow(tabTitles()[name], ![config isTabHidden:name], [@"tab." stringByAppendingString:name])];
+    [rows addObject:switchRow(@"搜索", [config boolForKey:kXHSNativeSearchTab], [@"pref." stringByAppendingString:kXHSNativeSearchTab])];
     NSMutableArray<NSString *> *order = [NSMutableArray array];
     for (NSString *name in config.tabOrder) [order addObject:tabTitles()[name]];
     [rows addObject:row(@"arrow", with(rowTitle(@"标签顺序"), @"setTrailing", [order componentsJoinedByString:@" "]), @"order")];
-    for (NSString *name in @[@"shopping", @"message", @"me"])
-        [rows addObject:switchRow(tabTitles()[name], ![config isTabHidden:name], [@"tab." stringByAppendingString:name])];
-    [rows addObject:switchRow(@"搜索", [config boolForKey:kXHSNativeSearchTab], [@"pref." stringByAppendingString:kXHSNativeSearchTab])];
     [rows addObject:switchRow(@"滚动时收起", [config boolForKey:kXHSNativeMinimize], [@"pref." stringByAppendingString:kXHSNativeMinimize])];
     [rows addObject:gap(24)];
 
     [rows addObject:row(@"label", rowTitle(@"液态玻璃"), @"glass.heading")];
     [rows addObject:gap(8)];
-    for (NSArray *option in @[@[@"图文笔记", kXHSNativeGlassNote], @[@"视频", kXHSNativeGlassVideo], @[@"搜索栏", kXHSNativeGlassSearch],
-                              @[@"评论输入栏", kXHSNativeGlassComments], @[@"私聊输入栏", kXHSNativeGlassChat],
-                              @[@"消息顶栏", kXHSNativeGlassMessages], @[@"个人页顶栏", kXHSNativeGlassProfile]])
+    for (NSArray *option in @[@[@"视频", kXHSNativeGlassVideo], @[@"搜索栏", kXHSNativeGlassSearch], @[@"图文笔记", kXHSNativeGlassNote],
+                              @[@"消息顶栏", kXHSNativeGlassMessages], @[@"评论输入栏", kXHSNativeGlassComments],
+                              @[@"私聊输入栏", kXHSNativeGlassChat], @[@"个人页顶栏", kXHSNativeGlassProfile]])
         [rows addObject:switchRow(option[0], [config boolForKey:option[1]], [@"pref." stringByAppendingString:option[1]])];
     [rows addObject:gap(8)];
     [rows addObject:row(@"label", rowTitle(@"下次进入页面时生效。"), @"glass.note")];
