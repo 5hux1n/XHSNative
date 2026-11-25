@@ -164,7 +164,8 @@
 %new
 - (BOOL)tabBarController:(UITabBarController *)controller shouldSelectTab:(UITab *)tab {
     if ([tab isKindOfClass:UISearchTab.class]) {
-        [XHSNativeHelper openSearch];
+        if (XHSNativeConfig.shared.isPublishSwapped) [XHSNativeHelper openPublish];
+        else [XHSNativeHelper openSearch];
         return NO;
     }
     // 重选要放行，didSelect 才收得到；小红书自己的 shouldSelect 可能会把它拦掉

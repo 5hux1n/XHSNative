@@ -8,6 +8,7 @@
 #import "XHSNativeConfig.h"
 
 NSString *const kXHSNativeSearchTab = @"XHSNative.searchTab";
+NSString *const kXHSNativeSwapPublish = @"XHSNative.swapPublish";
 NSString *const kXHSNativeMinimize = @"XHSNative.minimize";
 NSString *const kXHSNativeDisableDots = @"XHSNative.disableDots";
 NSString *const kXHSNativeGlassNote = @"XHSNative.glass.note";
@@ -51,6 +52,10 @@ static NSString *const kFillPrefix = @"XHSNative.fill.";
 
 - (BOOL)isDotsDisabled {
     return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeDisableDots];
+}
+
+- (BOOL)isPublishSwapped {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeSwapPublish];
 }
 
 - (void)setBool:(BOOL)value forKey:(NSString *)key {

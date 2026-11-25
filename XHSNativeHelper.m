@@ -334,12 +334,18 @@ static NSArray<NSArray *> *glassBars(void) {
         tab.badgeValue = (legacyNames && badgeIndex != NSNotFound) ? controller.badgeValueDict[@(badgeIndex)] : [self tabNamed:name].badgeValue;
         [tabs addObject:tab];
     }
-    if ([config boolForKey:kXHSNativeSearchTab]) {
-        // 系统的搜索标签会自己单独排在右边。它不切页面，点了直接开小红书的搜索，见 shouldSelectTab
+    BOOL swapped = config.isPublishSwapped;
+    if ([config boolForKey:kXHSNativeSearchTab] || swapped) {
+        // 系统的搜索标签会自己单独排在右边。它不切页面，点了直接开小红书的搜索，见 shouldSelectTab。
+        // 交换搜索与发布时，这一格换成发布
         if (!config.searchPage) config.searchPage = [UIViewController new];
         UIViewController *page = config.searchPage;
         UISearchTab *search = [[UISearchTab alloc] initWithViewControllerProvider:^UIViewController *(UITab *t) { return page; }];
         search.automaticallyActivatesSearch = YES;
+        if (swapped) {
+            search.title = @"发布";
+            search.image = [UIImage systemImageNamed:@"plus"];
+        }
         [tabs addObject:search];
     }
     config.rebuilding = YES;
@@ -482,27 +488,39 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
     if (!menu || !search) return;
     XHSNativeConfig.shared.searchButton = (UIControl *)search;
 
-    if (!publish) {
-        UIButtonConfiguration *config = [UIButtonConfiguration glassButtonConfiguration];
-        config.image = [UIImage systemImageNamed:@"plus"];
-        config.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
-        config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-        config.baseForegroundColor = UIColor.labelColor;
-        publish = [UIButton buttonWithConfiguration:config primaryAction:[UIAction actionWithHandler:^(UIAction *action) { [XHSNativeHelper openPublish]; }]];
-        publish.accessibilityLabel = @"发布";
-        objc_setAssociatedObject(bar, &kPublishKey, publish, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    if (publish.superview != bar) [bar addSubview:publish];
-    if (!CGRectEqualToRect(publish.frame, search.frame)) publish.frame = search.frame;
-    // 原搜索按钮和它背后那块玻璃都收起来（玻璃是和按钮同一位置的另一个视图）
-    for (UIView *view in bar.subviews) {
-        BOOL backing = [view isKindOfClass:UIVisualEffectView.class] && CGRectEqualToRect(view.frame, search.frame);
-        if ((view == search || backing) && !view.hidden) view.hidden = YES;
+    if (XHSNativeConfig.shared.isPublishSwapped) {
+        // 发布去了底栏，原来的搜索留在顶栏。之前收起过的话放出来
+        if (publish) {
+            [publish removeFromSuperview];
+            objc_setAssociatedObject(bar, &kPublishKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            for (UIView *view in bar.subviews) {
+                BOOL backing = [view isKindOfClass:UIVisualEffectView.class] && CGRectEqualToRect(view.frame, search.frame);
+                if (view == search || backing) view.hidden = NO;
+            }
+        }
+    } else {
+        if (!publish) {
+            UIButtonConfiguration *config = [UIButtonConfiguration glassButtonConfiguration];
+            config.image = [UIImage systemImageNamed:@"plus"];
+            config.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
+            config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+            config.baseForegroundColor = UIColor.labelColor;
+            publish = [UIButton buttonWithConfiguration:config primaryAction:[UIAction actionWithHandler:^(UIAction *action) { [XHSNativeHelper openPublish]; }]];
+            publish.accessibilityLabel = @"发布";
+            objc_setAssociatedObject(bar, &kPublishKey, publish, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (publish.superview != bar) [bar addSubview:publish];
+        if (!CGRectEqualToRect(publish.frame, search.frame)) publish.frame = search.frame;
+        // 原搜索按钮和它背后那块玻璃都收起来（玻璃是和按钮同一位置的另一个视图）
+        for (UIView *view in bar.subviews) {
+            BOOL backing = [view isKindOfClass:UIVisualEffectView.class] && CGRectEqualToRect(view.frame, search.frame);
+            if ((view == search || backing) && !view.hidden) view.hidden = YES;
+        }
     }
 
     if (!segment) return;
     // 「关注 发现 同城」垫一块玻璃，文字压在图片上才看得清；高度和两侧按钮对齐，在两个按钮之间居中
-    CGFloat left = CGRectGetMaxX(menu.frame) + 8, right = CGRectGetMinX(publish.frame) - 8;
+    CGFloat left = CGRectGetMaxX(menu.frame) + 8, right = CGRectGetMinX(search.frame) - 8;
     CGFloat width = MIN(right - left, CGRectGetWidth(segment.frame) + 16);
     CGFloat x = left + (right - left - width) / 2;
     CGRect frame = segment.frame;
@@ -820,6 +838,9 @@ static void darken(UIVisualEffectView *glass) {
     for (NSString *name in config.tabOrder) [order addObject:tabTitles()[name]];
     [rows addObject:row(@"arrow", with(rowTitle(@"标签顺序"), @"setTrailing", [order componentsJoinedByString:@" "]), @"order")];
     [rows addObject:switchRow(@"滚动时收起", [config boolForKey:kXHSNativeMinimize], [@"pref." stringByAppendingString:kXHSNativeMinimize])];
+    [rows addObject:switchRow(@"交换搜索与发布", config.isPublishSwapped, [@"pref." stringByAppendingString:kXHSNativeSwapPublish])];
+    [rows addObject:gap(8)];
+    [rows addObject:row(@"label", rowTitle(@"交换后，发布在底栏右侧，搜索回到首页顶栏。"), @"tabs.note")];
     [rows addObject:gap(24)];
 
     [rows addObject:row(@"label", rowTitle(@"首页频道"), @"channels.heading")];
