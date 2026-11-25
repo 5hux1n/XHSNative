@@ -233,15 +233,25 @@ static NSArray<NSArray *> *glassBars(void) {
 
 #pragma mark - 小红书
 
+// 这几个方法调用得很频繁，不用 dladdr，先算好主程序代码段的地址范围直接比
 + (BOOL)isAppAddress:(void *)address {
-    static const void *app;
+    static uintptr_t start, end;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        for (uint32_t i = 0; i < _dyld_image_count() && !app; i++)
-            if (((const struct mach_header_64 *)_dyld_get_image_header(i))->filetype == MH_EXECUTE) app = _dyld_get_image_header(i);
+        for (uint32_t i = 0; i < _dyld_image_count() && !start; i++) {
+            const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
+            if (header->filetype != MH_EXECUTE) continue;
+            const struct load_command *command = (const struct load_command *)(header + 1);
+            for (uint32_t j = 0; j < header->ncmds; j++, command = (const struct load_command *)((const char *)command + command->cmdsize)) {
+                const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+                if (command->cmd != LC_SEGMENT_64 || strcmp(segment->segname, SEG_TEXT)) continue;
+                start = (uintptr_t)header;
+                end = start + segment->vmsize;
+                break;
+            }
+        }
     });
-    Dl_info info;
-    return dladdr(address, &info) && info.dli_fbase == app;
+    return (uintptr_t)address >= start && (uintptr_t)address < end;
 }
 
 + (id)themeGlyph:(NSString *)name {
