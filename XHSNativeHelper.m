@@ -512,6 +512,23 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
     [self plateOn:bar key:&kSegmentGlassKey below:segment frame:plate bar:kXHSNativeBarHome];
 }
 
+// 首页的频道页（关注 发现 同城）都由 childViewModels 提供，标题、分页、按频道找下标都从这里取，
+// 在这一处过滤就能整个藏掉。全藏了就不过滤
++ (NSArray *)visibleChannels:(NSArray *)children {
+    XHSNativeConfig *config = XHSNativeConfig.shared;
+    NSMutableArray *visible = [NSMutableArray array];
+    for (id child in children)
+        if (![child respondsToSelector:@selector(childVCPageName)] || ![config isChannelHidden:[child childVCPageName]]) [visible addObject:child];
+    return visible.count ? visible : children;
+}
+
+// 默认打开的频道被藏了，就打开剩下的第一个
++ (NSUInteger)landingChannel:(NSUInteger)page ofHome:(XYMHomeViewController *)home {
+    if (![XHSNativeConfig.shared isChannelHidden:page]) return page;
+    id first = [[home dataSource] childViewModels].firstObject;
+    return [first respondsToSelector:@selector(childVCPageName)] ? [first childVCPageName] : page;
+}
+
 #pragma mark - 滚动联动
 
 + (void)trackScrollView:(UIScrollView *)list {
@@ -798,6 +815,15 @@ static void darken(UIVisualEffectView *glass) {
     [rows addObject:switchRow(@"滚动时收起", [config boolForKey:kXHSNativeMinimize], [@"pref." stringByAppendingString:kXHSNativeMinimize])];
     [rows addObject:gap(24)];
 
+    [rows addObject:row(@"label", rowTitle(@"首页频道"), @"channels.heading")];
+    [rows addObject:gap(8)];
+    NSArray *channels = @[@"关注", @"发现", @"同城"];
+    for (NSUInteger page = 0; page < channels.count; page++)
+        [rows addObject:switchRow(channels[page], ![config isChannelHidden:page], [NSString stringWithFormat:@"channel.%lu", (unsigned long)page])];
+    [rows addObject:gap(8)];
+    [rows addObject:row(@"label", rowTitle(@"重启小红书后生效。"), @"channels.note")];
+    [rows addObject:gap(24)];
+
     [rows addObject:row(@"label", rowTitle(@"液态玻璃"), @"glass.heading")];
     [rows addObject:gap(8)];
     for (NSArray *option in @[@[@"视频", kXHSNativeGlassVideo], @[@"搜索栏", kXHSNativeGlassSearch], @[@"图文笔记", kXHSNativeGlassNote],
@@ -895,6 +921,7 @@ static void darken(UIVisualEffectView *glass) {
     XHSNativeConfig *config = XHSNativeConfig.shared;
     if ([identity hasPrefix:@"pref."]) [config setBool:on forKey:[identity substringFromIndex:5]];
     else if ([identity hasPrefix:@"tab."]) [config setTab:[identity substringFromIndex:4] hidden:!on];
+    else if ([identity hasPrefix:@"channel."]) [config setChannel:[identity substringFromIndex:8].integerValue hidden:!on];
     [self applySettings];
 }
 

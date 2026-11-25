@@ -59,6 +59,10 @@ extern NSString *const kXHSNativeBarProfile;
 - (BOOL)isTabHidden:(NSString *)name;
 - (void)setTab:(NSString *)name hidden:(BOOL)hidden;
 
+// 首页顶栏的频道，按小红书的 childVCPageName：0 关注 1 发现 2 同城
+- (BOOL)isChannelHidden:(NSUInteger)page;
+- (void)setChannel:(NSUInteger)page hidden:(BOOL)hidden;
+
 // 0 是纯玻璃，100 不透
 - (CGFloat)fillForBar:(NSString *)bar;
 - (void)setFill:(CGFloat)fill forBar:(NSString *)bar;

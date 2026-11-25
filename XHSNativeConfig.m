@@ -27,6 +27,7 @@ NSString *const kXHSNativeBarProfile = @"profile";
 
 static NSString *const kTabOrder = @"XHSNative.tabOrder";
 static NSString *const kTabHidden = @"XHSNative.tabHidden";
+static NSString *const kChannelHidden = @"XHSNative.channelHidden";
 static NSString *const kFillPrefix = @"XHSNative.fill.";
 
 @implementation XHSNativeConfig
@@ -76,6 +77,18 @@ static NSString *const kFillPrefix = @"XHSNative.fill.";
     [names removeObject:name];
     if (hidden) [names addObject:name];
     [defaults setObject:names forKey:kTabHidden];
+}
+
+- (BOOL)isChannelHidden:(NSUInteger)page {
+    return [[NSUserDefaults.standardUserDefaults arrayForKey:kChannelHidden] containsObject:@(page)];
+}
+
+- (void)setChannel:(NSUInteger)page hidden:(BOOL)hidden {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSMutableArray<NSNumber *> *pages = [([defaults arrayForKey:kChannelHidden] ?: @[]) mutableCopy];
+    [pages removeObject:@(page)];
+    if (hidden) [pages addObject:@(page)];
+    [defaults setObject:pages forKey:kChannelHidden];
 }
 
 - (CGFloat)fillForBar:(NSString *)bar {

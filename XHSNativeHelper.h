@@ -47,6 +47,8 @@
 + (void)attachVisibleList;
 + (void)stripBarBackground:(XYMHomeNaviBar *)bar;
 + (void)layoutHomeBar:(XYMHomeNaviBar *)bar;
++ (NSArray *)visibleChannels:(NSArray *)children;
++ (NSUInteger)landingChannel:(NSUInteger)page ofHome:(XYMHomeViewController *)home;
 
 #pragma mark - 滚动联动
 

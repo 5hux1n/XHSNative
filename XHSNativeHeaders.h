@@ -25,6 +25,12 @@
 @end
 
 @interface XYMHomeViewController : UIViewController
+- (id)dataSource;
+@end
+
+// 首页的频道页：0 关注 1 发现 2 同城
+@interface NSObject (XYHomeChannel)
+- (NSUInteger)childVCPageName;
 @end
 
 @interface XYMHomeNaviBar : UIView
@@ -63,6 +69,10 @@
 @end
 
 // 下面几个是 Swift 类，真名在 %ctor 里对上
+@interface XYMHomeDataSource : NSObject
+- (NSArray *)childViewModels;
+@end
+
 @interface XYNativeSearchBar : UIView
 @property (nonatomic) BOOL usesLiquidGlass;
 @end

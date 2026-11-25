@@ -225,6 +225,18 @@
     return YES;
 }
 
+- (NSUInteger)defaultLandingTabPage {
+    return [XHSNativeHelper landingChannel:%orig ofHome:self];
+}
+
+%end
+
+%hook XYMHomeDataSource
+
+- (NSArray *)childViewModels {
+    return [XHSNativeHelper visibleChannels:%orig];
+}
+
 %end
 
 %hook XYMHomeLayoutAdapter
@@ -575,6 +587,7 @@
           XYCommentHalfBar = objc_getClass("_TtCC12XYNoteModule32CommentHalflayerBottomController4View"),
           XYNativeSearchBar = objc_getClass("XYSearchBar.XYSearchBarV2"),
           XYDeviceUtility = objc_getClass("XYUIKit.DeviceUtility"),
+          XYMHomeDataSource = objc_getClass("XYHomeModule.XYMHomeDataSource"),
           XYMarketRootInterface = objc_getClass("XYShopping.MarketRootInterface"),
           XYNoteDetailPage = objc_getClass("XYNoteModule.NoteDetailPageInterface"),
           XYNoteDirectionView = objc_getClass("XYNoteModule.NoteDirectionView"),
