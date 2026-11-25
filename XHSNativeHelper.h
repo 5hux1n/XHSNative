@@ -42,7 +42,7 @@
 
 #pragma mark - 首页顶栏
 
-+ (BOOL)isPinnedEdgeEffect:(UIScrollEdgeEffect *)effect;
++ (BOOL)isPinnedEdgeEffect:(id)effect;
 + (BOOL)hasSoftTopEdge:(UIScrollView *)list;
 + (void)useSoftTopEdge:(UIScrollView *)list;
 + (void)attachHomeBar:(UIScrollView *)list;

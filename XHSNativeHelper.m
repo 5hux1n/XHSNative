@@ -517,7 +517,9 @@ static NSArray<NSArray *> *glassBars(void) {
         if (!config.searchPage) config.searchPage = [UIViewController new];
         UIViewController *page = config.searchPage;
         UISearchTab *search = [[searchTabClass alloc] initWithViewControllerProvider:^UIViewController *(UITab *t) { return page; }];
-        search.automaticallyActivatesSearch = YES;
+        if ([search respondsToSelector:NSSelectorFromString(@"setAutomaticallyActivatesSearch:")]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(search, NSSelectorFromString(@"setAutomaticallyActivatesSearch:"), YES);
+        }
         if (swapped) {
             search.title = @"发布";
             search.image = [UIImage systemImageNamed:@"plus"];
@@ -534,7 +536,9 @@ static NSArray<NSArray *> *glassBars(void) {
     if ([self tabNamed:@"index"]) controller.customtabBar.alpha = 0;
     UITab *restored = selected ? [self tabNamed:selected] : nil;
     if (restored) controller.selectedTab = restored;
-    controller.tabBarMinimizeBehavior = [config boolForKey:kXHSNativeMinimize] ? UITabBarMinimizeBehaviorOnScrollDown : UITabBarMinimizeBehaviorNever;
+    if ([controller respondsToSelector:NSSelectorFromString(@"setTabBarMinimizeBehavior:")]) {
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(controller, NSSelectorFromString(@"setTabBarMinimizeBehavior:"), [config boolForKey:kXHSNativeMinimize] ? 2 : 1);
+    }
     config.rebuilding = NO;
 }
 
@@ -605,7 +609,7 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
     return table;
 }
 
-+ (BOOL)isPinnedEdgeEffect:(UIScrollEdgeEffect *)effect {
++ (BOOL)isPinnedEdgeEffect:(id)effect {
     return [[self pinnedEdgeEffects] containsObject:effect];
 }
 
@@ -640,15 +644,17 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
     UIView *bar = XHSNativeConfig.shared.homeBar;
     if (!bar || ![self isList:list underBar:bar]) return;
     [self useSoftTopEdge:list];
-    UIScrollEdgeElementContainerInteraction *interaction = objc_getAssociatedObject(bar, &kBarEdgeKey);
+    id interaction = objc_getAssociatedObject(bar, &kBarEdgeKey);
     if (!interaction) {
         Class cls = NSClassFromString(@"UIScrollEdgeElementContainerInteraction");
         interaction = [cls new];
-        interaction.edge = UIRectEdgeTop;
+        ((void (*)(id, SEL, UIRectEdge))objc_msgSend)(interaction, @selector(setEdge:), UIRectEdgeTop);
         [bar addInteraction:interaction];
         objc_setAssociatedObject(bar, &kBarEdgeKey, interaction, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (interaction.scrollView != list) interaction.scrollView = list;
+    if ([interaction performSelector:@selector(scrollView)] != list) {
+        ((void (*)(id, SEL, id))objc_msgSend)(interaction, @selector(setScrollView:), list);
+    }
 }
 
 + (void)findListIn:(UIView *)root underBar:(UIView *)bar best:(UIScrollView **)best {

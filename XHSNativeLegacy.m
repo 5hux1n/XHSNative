@@ -99,7 +99,8 @@ static UIImageView *XHSArtwork(const unsigned char *start, const unsigned char *
 - (void)didMoveToWindow {
     [super didMoveToWindow];
     if (self.window) {
-        if (_blurAnimator && _blurAnimator.state == UIViewAnimatingStateStopped) {
+        // 视图进窗口后再重建动画器，避免离屏阶段设置的 fractionComplete 失效导致无模糊
+        if (_blurAnimator) {
             [_blurAnimator stopAnimation:YES];
             _blurAnimator = nil;
         }
@@ -158,16 +159,16 @@ static UIImageView *XHSArtwork(const unsigned char *start, const unsigned char *
     CGFloat fill = self.barName.length ? [XHSNativeConfig.shared fillForBar:self.barName] : 0;
     CGFloat opacity = solid ? 1.0 : MIN(MAX(fill, 0), 100) / 100.0;
     CGFloat blur = XHSNativeConfig.shared.blurPercent / 100.0;
-    CGFloat fraction = blur * (0.15 + 0.85 * opacity);
-    if (_blurAnimator && (_blurAnimator.state == UIViewAnimatingStateInactive || fabs(_blurAnimator.fractionComplete - fraction) > 0.001)) {
+    CGFloat fraction = blur * (0.40 + 0.60 * opacity);
+    if (self.window && _blurAnimator && (_blurAnimator.state == UIViewAnimatingStateInactive || fabs(_blurAnimator.fractionComplete - fraction) > 0.001)) {
         _blurAnimator.fractionComplete = fraction;
     }
     _blur.hidden = solid || fraction <= 0.001;
     UIColor *neutral = dark ? [UIColor colorWithRed:0.13 green:0.13 blue:0.15 alpha:1] : UIColor.whiteColor;
-    CGFloat fillAlpha = solid ? 1.0 : (opacity * opacity);
-    _fillView.backgroundColor = fillAlpha > 0.001 ? [neutral colorWithAlphaComponent:fillAlpha] : UIColor.clearColor;
-    _shadowView.alpha = 0.25 + 0.40 * opacity;
-    _rimView.alpha = 0.22 + 0.35 * opacity;
+    CGFloat fillAlpha = solid ? 1.0 : MAX(0.06, opacity * opacity);
+    _fillView.backgroundColor = [neutral colorWithAlphaComponent:fillAlpha];
+    _shadowView.alpha = 0.28 + 0.40 * opacity;
+    _rimView.alpha = 0.30 + 0.35 * opacity;
 }
 
 - (void)setBounds:(CGRect)bounds {
@@ -573,7 +574,9 @@ static char kLegacyTabStateKey;
         static char kTabFadeKey;
         [self applySoftEdgeFadeOn:bar key:&kTabFadeKey fromTop:NO extraHeight:10];
 
-        if (state.capsule.superview != bar) [bar insertSubview:state.capsule atIndex:1];
+        if (state.capsule.superview != bar) [bar insertSubview:state.capsule atIndex:MIN(1, bar.subviews.count)];
+        state.capsule.hidden = NO;
+        state.capsule.alpha = 1.0;
         if (!CGRectEqualToRect(state.capsule.frame, capsuleFrame)) state.capsule.frame = capsuleFrame;
         [state.capsule refreshAppearance];
 

@@ -446,12 +446,18 @@ static char kPrevSelectedVCKey;
 - (NSString *)leftSideBarType {
     return [XHSNativeHelper leftEntranceType:%orig];
 }
+- (void)setLeftSideBarType:(NSString *)type {
+    %orig([XHSNativeHelper leftEntranceType:type]);
+}
 %end
 
 // 上次的入口类型会按账号缓存，启动时先用它
 %hook XYMainFrameLeftCache
 - (NSString *)type {
     return [XHSNativeHelper leftEntranceType:%orig];
+}
+- (void)setType:(NSString *)type {
+    %orig([XHSNativeHelper leftEntranceType:type]);
 }
 %end
 
@@ -465,6 +471,9 @@ static char kPrevSelectedVCKey;
 - (BOOL)isDianDianLeftEnable {
     if (XHSNativeConfig.shared.isDotsDisabled) return NO;
     return %orig;
+}
+- (NSString *)homePageLeftEntranceType {
+    return [XHSNativeHelper leftEntranceType:%orig];
 }
 - (BOOL)enableShareToDianDianExp {
     if (XHSNativeConfig.shared.isDotsDisabled) return NO;
@@ -552,7 +561,7 @@ static char kPrevSelectedVCKey;
     if (![XHSNativeLegacy isLiquidGlassOS] || ![XHSNativeConfig.shared boolForKey:kXHSNativeGlassMessages] || [self valueForKey:@"navigationGlassView"]) return;
     for (UIBarButtonItem *item in self.navigationItem.rightBarButtonItems) {
         if ([item respondsToSelector:NSSelectorFromString(@"setHidesSharedBackground:")]) {
-            item.hidesSharedBackground = NO;
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(item, NSSelectorFromString(@"setHidesSharedBackground:"), NO);
         }
     }
 }
