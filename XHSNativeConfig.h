@@ -14,6 +14,7 @@
 // 开关，默认都是开的
 extern NSString *const kXHSNativeSearchTab;     // 右侧的搜索
 extern NSString *const kXHSNativeMinimize;      // 滚动时收起底栏
+extern NSString *const kXHSNativeDisableDots;   // 禁用点点 AI，默认关
 extern NSString *const kXHSNativeGlassNote;
 extern NSString *const kXHSNativeGlassSearch;
 extern NSString *const kXHSNativeGlassComments;
@@ -52,6 +53,7 @@ extern NSString *const kXHSNativeBarProfile;
 @property (class, nonatomic, readonly) NSArray<NSString *> *allTabs;
 
 - (BOOL)boolForKey:(NSString *)key;
+- (BOOL)isDotsDisabled;
 - (void)setBool:(BOOL)value forKey:(NSString *)key;
 
 - (NSArray<NSString *> *)tabOrder;

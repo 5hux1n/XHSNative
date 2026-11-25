@@ -9,6 +9,7 @@
 
 NSString *const kXHSNativeSearchTab = @"XHSNative.searchTab";
 NSString *const kXHSNativeMinimize = @"XHSNative.minimize";
+NSString *const kXHSNativeDisableDots = @"XHSNative.disableDots";
 NSString *const kXHSNativeGlassNote = @"XHSNative.glass.note";
 NSString *const kXHSNativeGlassSearch = @"XHSNative.glass.search";
 NSString *const kXHSNativeGlassComments = @"XHSNative.glass.comments";
@@ -46,6 +47,10 @@ static NSString *const kFillPrefix = @"XHSNative.fill.";
 - (BOOL)boolForKey:(NSString *)key {
     id value = [NSUserDefaults.standardUserDefaults objectForKey:key];
     return value ? [value boolValue] : YES;
+}
+
+- (BOOL)isDotsDisabled {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeDisableDots];
 }
 
 - (void)setBool:(BOOL)value forKey:(NSString *)key {

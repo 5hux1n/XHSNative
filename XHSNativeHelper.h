@@ -49,6 +49,7 @@
 + (void)layoutHomeBar:(XYMHomeNaviBar *)bar;
 + (NSArray *)visibleChannels:(NSArray *)children;
 + (NSUInteger)landingChannel:(NSUInteger)page ofHome:(XYMHomeViewController *)home;
++ (NSString *)leftEntranceType:(NSString *)type;
 
 #pragma mark - 滚动联动
 

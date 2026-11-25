@@ -68,7 +68,28 @@
 - (id)blank;
 @end
 
+@interface XYPHNoteShareController : UIViewController
+@end
+
+@interface XYPHWebPageShareController : UIViewController
+@end
+
+@interface XYPHUserShareController : UIViewController
+@end
+
 // 下面几个是 Swift 类，真名在 %ctor 里对上
+@interface XYMainFrameEntranceConfig : NSObject
+@end
+
+@interface XYMainFrameLeftCache : NSObject
+@end
+
+@interface XYHomeDotsSwipeInstaller : NSObject
+@end
+
+@interface XYHomeService : NSObject
+@end
+
 @interface XYMHomeDataSource : NSObject
 - (NSArray *)childViewModels;
 @end

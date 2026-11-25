@@ -529,6 +529,13 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
     return [first respondsToSelector:@selector(childVCPageName)] ? [first childVCPageName] : page;
 }
 
+// 首页左上角的入口由服务器按账号下发：SETTING 侧边栏菜单，DOT 点点，RED_BOX 红包。
+// 禁用点点时把 DOT 当成 SETTING，图标和点击都回到侧边栏菜单
++ (NSString *)leftEntranceType:(NSString *)type {
+    if (!XHSNativeConfig.shared.isDotsDisabled || ![type isEqualToString:@"DOT"]) return type;
+    return @"SETTING";
+}
+
 #pragma mark - 滚动联动
 
 + (void)trackScrollView:(UIScrollView *)list {
@@ -822,6 +829,13 @@ static void darken(UIVisualEffectView *glass) {
         [rows addObject:switchRow(channels[page], ![config isChannelHidden:page], [NSString stringWithFormat:@"channel.%lu", (unsigned long)page])];
     [rows addObject:gap(8)];
     [rows addObject:row(@"label", rowTitle(@"重启小红书后生效。"), @"channels.note")];
+    [rows addObject:gap(24)];
+
+    [rows addObject:row(@"label", rowTitle(@"功能"), @"features.heading")];
+    [rows addObject:gap(8)];
+    [rows addObject:switchRow(@"禁用点点 AI", config.isDotsDisabled, [@"pref." stringByAppendingString:kXHSNativeDisableDots])];
+    [rows addObject:gap(8)];
+    [rows addObject:row(@"label", rowTitle(@"禁用点点 AI 后重启小红书生效。"), @"features.note")];
     [rows addObject:gap(24)];
 
     [rows addObject:row(@"label", rowTitle(@"液态玻璃"), @"glass.heading")];

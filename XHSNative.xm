@@ -298,6 +298,81 @@
 
 %end
 
+#pragma mark - 点点
+
+// 点点的入口：首页左上角、首页左滑、笔记里的「问点点」、分享面板。禁用后都按没有点点处理
+
+%hook XYMainFrameEntranceConfig
+- (NSString *)leftSideBarType {
+    return [XHSNativeHelper leftEntranceType:%orig];
+}
+%end
+
+// 上次的入口类型会按账号缓存，启动时先用它
+%hook XYMainFrameLeftCache
+- (NSString *)type {
+    return [XHSNativeHelper leftEntranceType:%orig];
+}
+%end
+
+%hook XYHomeDotsSwipeInstaller
++ (id)installWithHost:(id)host pager:(id)pager finishPagerHandoff:(id)handoff {
+    return XHSNativeConfig.shared.isDotsDisabled ? nil : %orig;
+}
+%end
+
+%hook XYHomeService
+- (BOOL)isDianDianLeftEnable {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+- (BOOL)enableShareToDianDianExp {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+- (BOOL)isDotsEntryEnabledForCategory:(id)category {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+%end
+
+%hook XYPHNoteShareController
+- (BOOL)enableShowDianDian {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+- (BOOL)enableShowDianDianWithScene {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+- (BOOL)enableShareToDianDianApp {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+%end
+
+%hook XYPHWebPageShareController
+- (BOOL)enableShowDianDian {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+- (BOOL)enableShareToDianDianApp {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+%end
+
+%hook XYPHUserShareController
+- (BOOL)enableShowDianDian {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+- (BOOL)enableShareToDianDianApp {
+    if (XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return %orig;
+}
+%end
+
 #pragma mark - 滚动联动
 
 // UICollectionView / UITableView 各自重写了 didMoveToWindow，不一定走到 UIScrollView 的实现，三个都挂
@@ -588,6 +663,10 @@
           XYNativeSearchBar = objc_getClass("XYSearchBar.XYSearchBarV2"),
           XYDeviceUtility = objc_getClass("XYUIKit.DeviceUtility"),
           XYMHomeDataSource = objc_getClass("XYHomeModule.XYMHomeDataSource"),
+          XYMainFrameEntranceConfig = objc_getClass("XYHomeModule.MainFrameEntranceConfigManager"),
+          XYMainFrameLeftCache = objc_getClass("XYModuleInterface.MainFrameLeftCacheModel"),
+          XYHomeDotsSwipeInstaller = objc_getClass("XYHomeModule.HomeDotsSwipeInstaller"),
+          XYHomeService = objc_getClass("XYHomeModule.HomeServiceImp"),
           XYMarketRootInterface = objc_getClass("XYShopping.MarketRootInterface"),
           XYNoteDetailPage = objc_getClass("XYNoteModule.NoteDetailPageInterface"),
           XYNoteDirectionView = objc_getClass("XYNoteModule.NoteDirectionView"),
