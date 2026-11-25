@@ -99,6 +99,7 @@ static BOOL gInShowBadgeForTabId;
     XHSNativeConfig.shared.tabBarController = self;
     %orig;
     self.tabBar.unselectedItemTintColor = UIColor.labelColor;
+    if ([XHSNativeLegacy isLiquidGlassOS]) [XHSNativeHelper installHomeLongPressOnTabBar:self.tabBar];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -267,6 +268,7 @@ static BOOL gInShowBadgeForTabId;
     return %orig;
 }
 
+// 切换前记下旧页面，避免低系统滑动切换后误判为重复点击触发回顶刷新
 static char kPrevSelectedVCKey;
 
 - (BOOL)tabBarController:(UITabBarController *)controller shouldSelectViewController:(UIViewController *)viewController {

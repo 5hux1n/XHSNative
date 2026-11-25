@@ -311,6 +311,33 @@ static NSArray<NSArray *> *glassBars(void) {
              @[@"评论输入栏", kXHSNativeBarComment], @[@"个人页顶栏", kXHSNativeBarProfile]];
 }
 
+// 长按底栏「首页」直接呼出插件设置页，双系统共用同一套跳转逻辑
+@interface XHSNativeHomeLongPressHandler : NSObject <UIGestureRecognizerDelegate>
+@property (nonatomic, weak) UITabBar *bar;
+@end
+
+@implementation XHSNativeHomeLongPressHandler
+
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    UITabBar *bar = self.bar;
+    UITab *home = [XHSNativeHelper tabNamed:@"index"];
+    if (!bar || !home) return NO;
+    CGPoint loc = [gestureRecognizer locationInView:bar];
+    UITabBarItem *homeItem = home.viewController.tabBarItem;
+    UIView *itemView = [homeItem respondsToSelector:NSSelectorFromString(@"view")] ? [homeItem valueForKey:@"view"] : nil;
+    if (itemView && itemView.window == bar.window && CGRectGetWidth(itemView.bounds) > 0) {
+        return CGRectContainsPoint([bar convertRect:itemView.bounds fromView:itemView], loc);
+    }
+    // iOS 26 滚动收起态下底层 itemView 可能被隐藏，回退判断当前是否停在首页且点在左半侧胶囊内
+    return XHSNativeConfig.shared.tabBarController.selectedTab == home && CGRectContainsPoint(bar.bounds, loc) && loc.x < CGRectGetWidth(bar.bounds) * 0.5;
+}
+
+- (void)handleLongPress:(UILongPressGestureRecognizer *)press {
+    if (press.state == UIGestureRecognizerStateBegan) [XHSNativeHelper openSettingsMenu];
+}
+
+@end
+
 @implementation XHSNativeHelper
 
 #pragma mark - 视图
@@ -531,6 +558,30 @@ static NSArray<NSArray *> *glassBars(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [config.searchButton sendActionsForControlEvents:UIControlEventTouchUpInside];
     });
+}
+
++ (void)openSettingsMenu {
+    XYTabbarController *controller = XHSNativeConfig.shared.tabBarController;
+    if (!controller) return;
+    UINavigationController *nav = (UINavigationController *)controller.selectedViewController;
+    if (![nav isKindOfClass:UINavigationController.class]) return;
+    if ([nav.topViewController isKindOfClass:objc_getClass("XHSNativeSettingsPage")]) return;
+    [[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+    UIViewController *settings = [[objc_getClass("XHSNativeSettingsPage") alloc] init];
+    settings.hidesBottomBarWhenPushed = YES;
+    [nav pushViewController:settings animated:YES];
+}
+
++ (void)installHomeLongPressOnTabBar:(UITabBar *)bar {
+    static char kHandlerKey;
+    if (!bar || objc_getAssociatedObject(bar, &kHandlerKey)) return;
+    XHSNativeHomeLongPressHandler *handler = [XHSNativeHomeLongPressHandler new];
+    handler.bar = bar;
+    UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc] initWithTarget:handler action:@selector(handleLongPress:)];
+    press.minimumPressDuration = 0.45;
+    press.delegate = handler;
+    [bar addGestureRecognizer:press];
+    objc_setAssociatedObject(bar, &kHandlerKey, handler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // 重复点当前标签。小红书的每个标签页都实现了 XYTabbarClicked（首页是回到顶部并刷新），
@@ -947,6 +998,7 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
         setOffset(fieldGroup, margin + 6 - CGRectGetMinX(row) - CGRectGetMinX(layoutFrame(fieldGroup)), 0);
         setOffset(buttons, CGRectGetMaxX(right) - padding - CGRectGetMinX(row) - CGRectGetMaxX(layoutFrame(buttons)), 0);
     }
+    // 玻璃底板实际插在 content 里，关联宿主用 content 而不是 bar；同时清掉残留玻璃视图，防止重建后多层叠加
     UIView *leftGlass = [self plateOn:content key:&kNoteBottomKey below:stack frame:left bar:kXHSNativeBarNoteBottom];
     UIView *rightGlass = [self plateOn:content key:&kNoteBottomRightKey below:stack frame:right bar:kXHSNativeBarNoteBottom];
     for (UIView *view in [content.subviews copy]) {

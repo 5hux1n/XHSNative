@@ -290,16 +290,7 @@ static char kLegacyTabStateKey;
 }
 
 - (void)handleHomeLongPress:(UILongPressGestureRecognizer *)press {
-    XYTabbarController *tabBarController = XHSNativeConfig.shared.tabBarController;
-    if (press.state != UIGestureRecognizerStateBegan || !tabBarController) return;
-    UINavigationController *nav = (UINavigationController *)tabBarController.selectedViewController;
-    if (![nav isKindOfClass:UINavigationController.class]) return;
-    if ([nav.topViewController isKindOfClass:objc_getClass("XHSNativeSettingsPage")]) return;
-    UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [haptic impactOccurred];
-    UIViewController *settings = [[objc_getClass("XHSNativeSettingsPage") alloc] init];
-    settings.hidesBottomBarWhenPushed = YES;
-    [nav pushViewController:settings animated:YES];
+    if (press.state == UIGestureRecognizerStateBegan) [XHSNativeHelper openSettingsMenu];
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {

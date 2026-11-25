@@ -36,6 +36,8 @@
 + (void)rebuildTabs;
 + (void)openPublish;
 + (void)openSearch;
++ (void)openSettingsMenu;
++ (void)installHomeLongPressOnTabBar:(UITabBar *)bar;
 + (void)reselectTab:(id)tab;
 
 #pragma mark - 首页顶栏
