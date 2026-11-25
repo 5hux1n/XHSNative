@@ -643,7 +643,18 @@ static void extendDown(UIView *parent, UIView *root, CGFloat gap, int depth) {
 // 正文延伸到上下两条栏的后面，栏的底色去掉，控件悬浮在玻璃胶囊上。
 // 顶栏两块：返回 + 头像 + 昵称 / 关注 + 分享；底栏一块：评论框 + 点赞收藏评论。
 
-static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteEdgeKey;
+static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteBottomRightKey, kNoteEdgeKey;
+
+// 不算位移的 frame（frame 会把 transform 算进去）
+static CGRect layoutFrame(UIView *view) {
+    CGSize size = view.bounds.size;
+    return CGRectMake(view.center.x - size.width / 2, view.center.y - size.height / 2, size.width, size.height);
+}
+
+static void setOffset(UIView *view, CGFloat x, CGFloat y) {
+    CGAffineTransform transform = (fabs(x) < 0.5 && fabs(y) < 0.5) ? CGAffineTransformIdentity : CGAffineTransformMakeTranslation(x, y);
+    if (view && !CGAffineTransformEqualToTransform(view.transform, transform)) view.transform = transform;
+}
 
 + (void)layoutNoteTop:(UIView *)bar {
     [self clearBackground:bar];
@@ -689,7 +700,7 @@ static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteEdgeKey;
 + (void)layoutNoteBottom:(UIView *)bar {
     [self clearBackground:bar];
     XYNoteInteractionView *content = (id)[self subviewOf:bar named:@"XYNoteModule.InteractionView"];
-    if (!content) return;
+    if (!content.window) return;
     [self clearBackground:content];
     UIView *stack = nil;
     for (UIView *view in content.subviews) {
@@ -704,11 +715,47 @@ static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteEdgeKey;
     UIView *mask = [like respondsToSelector:@selector(lottieMaskView)] ? like.lottieMaskView : nil;
     if (mask && mask.superview == like.imageView && !mask.subviews.count && mask.alpha != 0) mask.alpha = 0;
     // 评论框自带的灰色药丸底去掉，和旁边的按钮一样直接放在玻璃上
-    for (UIView *group in stack.subviews)
-        for (UIView *field in group.subviews)
-            if ([NSStringFromClass(field.class) hasSuffix:@"Field"]) [self clearBackground:field];
-    CGRect frame = CGRectMake(8, CGRectGetMidY(stack.frame) - 24, CGRectGetWidth(content.bounds) - 16, 48);
-    [self plateOn:bar key:&kNoteBottomKey below:stack frame:frame bar:kXHSNativeBarNoteBottom];
+    UIView *fieldGroup = nil, *buttons = nil;
+    for (UIView *group in stack.subviews) {
+        BOOL hasField = NO;
+        for (UIView *field in group.subviews) {
+            if (![NSStringFromClass(field.class) hasSuffix:@"Field"]) continue;
+            [self clearBackground:field];
+            hasField = YES;
+        }
+        if (hasField) fieldGroup = fieldGroup ?: group;
+        else if ([group isKindOfClass:UIStackView.class]) buttons = group;
+    }
+
+    // 拆成两块：左边评论框，右边点赞、收藏、评论。左右和底下留一样的边距，和屏幕圆角同心；
+    // 没有底部安全区的机型在栏里居中。控件用位移挪进去，不动小红书的约束
+    CGFloat height = 48, gap = 10, padding = 10;
+    CGFloat width = CGRectGetWidth(content.bounds), below = CGRectGetHeight(content.window.bounds) - CGRectGetMaxY([content convertRect:content.bounds toView:nil]);
+    CGFloat margin = content.window.safeAreaInsets.bottom > 0 ? 20 : (CGRectGetHeight(content.bounds) - height) / 2;
+    CGFloat y = CGRectGetHeight(content.bounds) + below - margin - height;
+    CGRect row = layoutFrame(stack);
+    setOffset(stack, 0, y + height / 2 - CGRectGetMidY(row));
+
+    CGRect left = CGRectMake(margin, y, width - margin * 2, height), right = CGRectZero;
+    if (fieldGroup && buttons) {
+        CGRect group = layoutFrame(buttons);
+        right = CGRectMake(width - margin - CGRectGetWidth(group) - padding * 2, y, CGRectGetWidth(group) + padding * 2, height);
+        left.size.width = CGRectGetMinX(right) - gap - margin;
+        if (CGRectGetWidth(left) < 80) {
+            // 数字太长放不下两块，退回一整条
+            left.size.width = width - margin * 2;
+            right = CGRectZero;
+        }
+    }
+    if (CGRectIsEmpty(right)) {
+        setOffset(fieldGroup, 0, 0);
+        setOffset(buttons, 0, 0);
+    } else {
+        setOffset(fieldGroup, margin + 6 - CGRectGetMinX(row) - CGRectGetMinX(layoutFrame(fieldGroup)), 0);
+        setOffset(buttons, CGRectGetMaxX(right) - padding - CGRectGetMinX(row) - CGRectGetMaxX(layoutFrame(buttons)), 0);
+    }
+    [self plateOn:bar key:&kNoteBottomKey below:stack frame:left bar:kXHSNativeBarNoteBottom];
+    [self plateOn:bar key:&kNoteBottomRightKey below:stack frame:right bar:kXHSNativeBarNoteBottom];
 }
 
 + (void)layoutNotePage:(UIViewController *)page {
