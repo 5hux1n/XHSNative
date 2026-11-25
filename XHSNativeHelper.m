@@ -14,6 +14,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import "XHSNativeConfig.h"
+#import "XHSNativeLegacy.h"
 
 #pragma mark - 滚动联动
 
@@ -34,7 +35,7 @@
 
 - (void)pan:(UIPanGestureRecognizer *)pan {
     UIScrollView *list = (UIScrollView *)pan.view;
-    if (pan.state != UIGestureRecognizerStateBegan || ![list isKindOfClass:UIScrollView.class]) return;
+    if (![list isKindOfClass:UIScrollView.class]) return;
     // 只认竖向列表，横向分页容器不算
     if (list.contentSize.height <= CGRectGetHeight(list.bounds) && !list.alwaysBounceVertical) return;
     if (list.contentSize.width > CGRectGetWidth(list.bounds) + 1 && list.pagingEnabled) return;
@@ -42,8 +43,17 @@
     UINavigationController *navigation = (UINavigationController *)XHSNativeConfig.shared.tabBarController.selectedViewController;
     UIViewController *page = [navigation isKindOfClass:UINavigationController.class] ? navigation.topViewController : navigation;
     if (!page.isViewLoaded || ![list isDescendantOfView:page.view]) return;
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy handleScrollPan:pan inPage:page];
+        return;
+    }
+    if (pan.state != UIGestureRecognizerStateBegan) return;
     [XHSNativeHelper attachHomeBar:list];
-    if ([page contentScrollViewForEdge:NSDirectionalRectEdgeBottom] != list) [page setContentScrollView:list forEdge:NSDirectionalRectEdgeBottom];
+    if ([page respondsToSelector:@selector(contentScrollViewForEdge:)] &&
+        [page respondsToSelector:@selector(setContentScrollView:forEdge:)] &&
+        [page contentScrollViewForEdge:NSDirectionalRectEdgeBottom] != list) {
+        [page setContentScrollView:list forEdge:NSDirectionalRectEdgeBottom];
+    }
 }
 
 @end
@@ -305,11 +315,18 @@ static NSArray<NSArray *> *glassBars(void) {
 
 #pragma mark - 视图
 
-+ (UIVisualEffectView *)plateOn:(UIView *)owner key:(const void *)key below:(UIView *)below frame:(CGRect)frame bar:(NSString *)bar {
++ (UIView *)plateOn:(UIView *)owner key:(const void *)key below:(UIView *)below frame:(CGRect)frame bar:(NSString *)bar {
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        return [XHSNativeLegacy plateOn:owner key:key below:below frame:frame bar:bar];
+    }
     UIVisualEffectView *glass = objc_getAssociatedObject(owner, key);
     if (!glass) {
-        glass = [[UIVisualEffectView alloc] initWithEffect:[UIGlassEffect effectWithStyle:UIGlassEffectStyleRegular]];
-        glass.cornerConfiguration = [UICornerConfiguration capsuleConfiguration];
+        Class glassClass = NSClassFromString(@"UIGlassEffect");
+        Class cornerClass = NSClassFromString(@"UICornerConfiguration");
+        id effect = ((id (*)(id, SEL, NSInteger))objc_msgSend)(glassClass, NSSelectorFromString(@"effectWithStyle:"), 0);
+        glass = [[UIVisualEffectView alloc] initWithEffect:effect];
+        id capsule = ((id (*)(id, SEL))objc_msgSend)(cornerClass, NSSelectorFromString(@"capsuleConfiguration"));
+        ((void (*)(id, SEL, id))objc_msgSend)(glass, NSSelectorFromString(@"setCornerConfiguration:"), capsule);
         glass.userInteractionEnabled = NO;
         glass.contentView.layer.masksToBounds = YES;
         objc_setAssociatedObject(owner, key, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -405,7 +422,9 @@ static NSArray<NSArray *> *glassBars(void) {
 
 // 当前显示着的、对应某个页面的标签
 + (UITab *)tabNamed:(NSString *)name {
-    for (UITab *tab in XHSNativeConfig.shared.tabBarController.tabs)
+    if (![XHSNativeLegacy isLiquidGlassOS]) return nil;
+    NSArray *tabs = [XHSNativeConfig.shared.tabBarController respondsToSelector:@selector(tabs)] ? ((id (*)(id, SEL))objc_msgSend)(XHSNativeConfig.shared.tabBarController, @selector(tabs)) : nil;
+    for (UITab *tab in tabs)
         if ([tab.identifier isEqualToString:name]) return tab;
     return nil;
 }
@@ -422,7 +441,11 @@ static NSArray<NSArray *> *glassBars(void) {
     XHSNativeConfig *config = XHSNativeConfig.shared;
     if (config.searchPage && item == config.searchPage.tabBarItem) return YES;
     for (NSUInteger i = 0; i < config.pages.count; i++) {
-        if (item == config.pages[i].tabBarItem) return [self tabNamed:config.pageNames[i]].enabled;
+        if (item == config.pages[i].tabBarItem) {
+            return [XHSNativeLegacy isLiquidGlassOS]
+                ? [self tabNamed:config.pageNames[i]].enabled
+                : ![config isTabHidden:config.pageNames[i]];
+        }
     }
     return NO;
 }
@@ -433,6 +456,10 @@ static NSArray<NSArray *> *glassBars(void) {
 }
 
 + (void)rebuildTabs {
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy rebuildLegacyTabs];
+        return;
+    }
     XHSNativeConfig *config = XHSNativeConfig.shared;
     XYTabbarController *controller = config.tabBarController;
     if (!controller || !config.pages.count) return;
@@ -444,11 +471,13 @@ static NSArray<NSArray *> *glassBars(void) {
     NSString *selected = controller.selectedTab.identifier;
     NSMutableArray<UITab *> *tabs = [NSMutableArray array];
     NSArray *legacyNames = [self legacyTabNames:controller];
+    Class tabClass = NSClassFromString(@"UITab");
+    Class searchTabClass = NSClassFromString(@"UISearchTab");
     for (NSString *name in config.tabOrder) {
         NSUInteger index = [config.pageNames indexOfObject:name];
         if (index == NSNotFound || [config isTabHidden:name]) continue;
         UIViewController *page = config.pages[index];
-        UITab *tab = [[UITab alloc] initWithTitle:@"" image:[self tabIcon:name selected:NO] identifier:name viewControllerProvider:^UIViewController *(UITab *t) { return page; }];
+        UITab *tab = [[tabClass alloc] initWithTitle:@"" image:[self tabIcon:name selected:NO] identifier:name viewControllerProvider:^UIViewController *(UITab *t) { return page; }];
         if ([tab respondsToSelector:@selector(setSelectedImage:)]) [(id)tab setSelectedImage:[self tabIcon:name selected:YES]];
         NSUInteger badgeIndex = [legacyNames indexOfObject:name];
         tab.badgeValue = (legacyNames && badgeIndex != NSNotFound) ? controller.badgeValueDict[@(badgeIndex)] : [self tabNamed:name].badgeValue;
@@ -460,7 +489,7 @@ static NSArray<NSArray *> *glassBars(void) {
         // 交换搜索与发布时，这一格换成发布
         if (!config.searchPage) config.searchPage = [UIViewController new];
         UIViewController *page = config.searchPage;
-        UISearchTab *search = [[UISearchTab alloc] initWithViewControllerProvider:^UIViewController *(UITab *t) { return page; }];
+        UISearchTab *search = [[searchTabClass alloc] initWithViewControllerProvider:^UIViewController *(UITab *t) { return page; }];
         search.automaticallyActivatesSearch = YES;
         if (swapped) {
             search.title = @"发布";
@@ -492,8 +521,13 @@ static NSArray<NSArray *> *glassBars(void) {
 // 等同于点首页顶栏原来的搜索。搜索页是从首页进的，不在首页时先切回去
 + (void)openSearch {
     XHSNativeConfig *config = XHSNativeConfig.shared;
-    UITab *home = [self tabNamed:@"index"];
-    if (home && config.tabBarController.selectedTab != home) config.tabBarController.selectedTab = home;
+    if ([XHSNativeLegacy isLiquidGlassOS]) {
+        UITab *home = [self tabNamed:@"index"];
+        if (home && config.tabBarController.selectedTab != home) config.tabBarController.selectedTab = home;
+    } else {
+        UIViewController *home = [XHSNativeLegacy legacyPageForName:@"index"];
+        if (home && config.tabBarController.selectedViewController != home) config.tabBarController.selectedViewController = home;
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         [config.searchButton sendActionsForControlEvents:UIControlEventTouchUpInside];
     });
@@ -501,8 +535,9 @@ static NSArray<NSArray *> *glassBars(void) {
 
 // 重复点当前标签。小红书的每个标签页都实现了 XYTabbarClicked（首页是回到顶部并刷新），
 // 原来由它的自绘底栏调用，换成系统底栏后要自己转过去
-+ (void)reselectTab:(UITab *)tab {
-    UINavigationController *navigation = (UINavigationController *)tab.viewController;
++ (void)reselectTab:(id)tab {
+    UIViewController *vc = [tab isKindOfClass:UIViewController.class] ? (UIViewController *)tab : ([tab respondsToSelector:@selector(viewController)] ? ((id (*)(id, SEL))objc_msgSend)(tab, @selector(viewController)) : nil);
+    UINavigationController *navigation = (UINavigationController *)vc;
     UIViewController *page = [navigation isKindOfClass:UINavigationController.class] ? navigation.viewControllers.firstObject : navigation;
     SEL clicked = NSSelectorFromString(@"XYTabbarClicked");
     if ([page respondsToSelector:clicked]) ((void (*)(id, SEL))objc_msgSend)(page, clicked);
@@ -510,7 +545,7 @@ static NSArray<NSArray *> *glassBars(void) {
 
 #pragma mark - 首页顶栏
 
-static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
+static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlassKey, kHomeFadeKey, kSegmentGlassKey;
 
 + (NSHashTable *)pinnedEdgeEffects {
     static NSHashTable *table;
@@ -528,11 +563,14 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
 }
 
 + (void)useSoftTopEdge:(UIScrollView *)list {
-    if ([self hasSoftTopEdge:list]) return;
+    if (![XHSNativeLegacy isLiquidGlassOS] || [self hasSoftTopEdge:list]) return;
     objc_setAssociatedObject(list, &kSoftEdgeKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [[self pinnedEdgeEffects] addObject:list.topEdgeEffect];
-    list.topEdgeEffect.style = UIScrollEdgeEffectStyle.softStyle;
-    list.topEdgeEffect.hidden = NO;
+    id edge = [list valueForKey:@"topEdgeEffect"];
+    if (!edge) return;
+    [[self pinnedEdgeEffects] addObject:edge];
+    Class styleClass = NSClassFromString(@"UIScrollEdgeEffectStyle");
+    if (styleClass) [edge setValue:((id (*)(id, SEL))objc_msgSend)(styleClass, NSSelectorFromString(@"softStyle")) forKey:@"style"];
+    [edge setValue:@NO forKey:@"hidden"];
 }
 
 // 这个列表是不是当前屏幕上、压在顶栏下面的那个竖向列表
@@ -547,12 +585,14 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
 
 // 告诉系统顶栏压在这个列表上，边缘效果才会按顶栏的高度铺开。同一时刻只跟当前在看的那个列表
 + (void)attachHomeBar:(UIScrollView *)list {
+    if (![XHSNativeLegacy isLiquidGlassOS]) return;
     UIView *bar = XHSNativeConfig.shared.homeBar;
     if (!bar || ![self isList:list underBar:bar]) return;
     [self useSoftTopEdge:list];
     UIScrollEdgeElementContainerInteraction *interaction = objc_getAssociatedObject(bar, &kBarEdgeKey);
     if (!interaction) {
-        interaction = [UIScrollEdgeElementContainerInteraction new];
+        Class cls = NSClassFromString(@"UIScrollEdgeElementContainerInteraction");
+        interaction = [cls new];
         interaction.edge = UIRectEdgeTop;
         [bar addInteraction:interaction];
         objc_setAssociatedObject(bar, &kBarEdgeKey, interaction, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -596,6 +636,10 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
 + (void)layoutHomeBar:(XYMHomeNaviBar *)bar {
     XHSNativeConfig.shared.homeBar = bar;
     [self stripBarBackground:bar];
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy applySoftEdgeFadeOn:bar key:&kHomeFadeKey fromTop:YES extraHeight:16];
+        [XHSNativeLegacy extendHomeFeedUnderNaviBar:bar];
+    }
 
     UIButton *publish = objc_getAssociatedObject(bar, &kPublishKey);
     UIView *menu = nil, *segment = nil, *search = nil;
@@ -613,29 +657,53 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
         if (publish) {
             [publish removeFromSuperview];
             objc_setAssociatedObject(bar, &kPublishKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            ((UIView *)objc_getAssociatedObject(bar, &kPublishGlassKey)).hidden = YES;
             for (UIView *view in bar.subviews) {
                 BOOL backing = [view isKindOfClass:UIVisualEffectView.class] && CGRectEqualToRect(view.frame, search.frame);
                 if (view == search || backing) view.hidden = NO;
             }
         }
+        if (![XHSNativeLegacy isLiquidGlassOS]) {
+            [self plateOn:bar key:&kPublishGlassKey below:search frame:search.hidden ? CGRectZero : search.frame bar:kXHSNativeBarHome];
+        }
     } else {
         if (!publish) {
-            UIButtonConfiguration *config = [UIButtonConfiguration glassButtonConfiguration];
-            config.image = [UIImage systemImageNamed:@"plus"];
-            config.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
-            config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-            config.baseForegroundColor = UIColor.labelColor;
-            publish = [UIButton buttonWithConfiguration:config primaryAction:[UIAction actionWithHandler:^(UIAction *action) { [XHSNativeHelper openPublish]; }]];
-            publish.accessibilityLabel = @"发布";
+            if ([XHSNativeLegacy isLiquidGlassOS]) {
+                SEL glassSel = NSSelectorFromString(@"glassButtonConfiguration");
+                UIButtonConfiguration *config = ((id (*)(id, SEL))objc_msgSend)(UIButtonConfiguration.class, glassSel);
+                config.image = [UIImage systemImageNamed:@"plus"];
+                config.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
+                config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+                config.baseForegroundColor = UIColor.labelColor;
+                publish = [UIButton buttonWithConfiguration:config primaryAction:[UIAction actionWithHandler:^(UIAction *action) { [XHSNativeHelper openPublish]; }]];
+                publish.accessibilityLabel = @"发布";
+            } else {
+                publish = [XHSNativeLegacy glassIconButtonWithSymbol:@"plus" label:@"发布" handler:^{ [XHSNativeHelper openPublish]; }];
+            }
             objc_setAssociatedObject(bar, &kPublishKey, publish, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         if (publish.superview != bar) [bar addSubview:publish];
         if (!CGRectEqualToRect(publish.frame, search.frame)) publish.frame = search.frame;
+        if (![XHSNativeLegacy isLiquidGlassOS]) {
+            [self plateOn:bar key:&kPublishGlassKey below:publish frame:publish.hidden ? CGRectZero : publish.frame bar:kXHSNativeBarHome];
+        }
         // 原搜索按钮和它背后那块玻璃都收起来（玻璃是和按钮同一位置的另一个视图）
         for (UIView *view in bar.subviews) {
             BOOL backing = [view isKindOfClass:UIVisualEffectView.class] && CGRectEqualToRect(view.frame, search.frame);
             if ((view == search || backing) && !view.hidden) view.hidden = YES;
         }
+    }
+
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        CGPoint iconCenter = CGPointMake(CGRectGetMidX(menu.frame), CGRectGetMidY(menu.frame));
+        for (UIView *sub in menu.subviews) {
+            if ([sub isKindOfClass:UIImageView.class] && CGRectGetWidth(sub.bounds) > 0) {
+                iconCenter = [bar convertPoint:CGPointMake(CGRectGetMidX(sub.bounds), CGRectGetMidY(sub.bounds)) fromView:sub];
+                break;
+            }
+        }
+        CGRect menuCircle = CGRectMake(round(iconCenter.x - 22), round(iconCenter.y - 22), 44, 44);
+        [self plateOn:bar key:&kMenuGlassKey below:menu frame:menu.hidden ? CGRectZero : menuCircle bar:kXHSNativeBarHome];
     }
 
     if (!segment) return;
@@ -646,7 +714,9 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kSegmentGlassKey;
     CGRect frame = segment.frame;
     frame.origin.x = x + (width - CGRectGetWidth(frame)) / 2;
     if (!CGRectEqualToRect(segment.frame, frame)) segment.frame = frame;
-    CGRect plate = segment.hidden ? CGRectZero : CGRectMake(x, CGRectGetMinY(menu.frame), width, CGRectGetHeight(menu.frame));
+    CGFloat segH = [XHSNativeLegacy isLiquidGlassOS] ? CGRectGetHeight(menu.frame) : 44;
+    CGFloat segY = [XHSNativeLegacy isLiquidGlassOS] ? CGRectGetMinY(menu.frame) : (CGRectGetMidY(menu.frame) - 22);
+    CGRect plate = segment.hidden ? CGRectZero : CGRectMake(x, segY, width, segH);
     [self plateOn:bar key:&kSegmentGlassKey below:segment frame:plate bar:kXHSNativeBarHome];
 }
 
@@ -763,7 +833,7 @@ static void extendDown(UIView *parent, UIView *root, CGFloat gap, int depth) {
 // 正文延伸到上下两条栏的后面，栏的底色去掉，控件悬浮在玻璃胶囊上。
 // 顶栏两块：返回 + 头像 + 昵称 / 关注 + 分享；底栏一块：评论框 + 点赞收藏评论。
 
-static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteBottomRightKey, kNoteEdgeKey;
+static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteBottomRightKey, kNoteEdgeKey, kNoteTopFadeKey;
 
 // 不算位移的 frame（frame 会把 transform 算进去）
 static CGRect layoutFrame(UIView *view) {
@@ -781,11 +851,14 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
     // 控件那一行在安全区下面
     UIView *row = nil;
     for (UIView *view in bar.subviews) {
-        if ([view isKindOfClass:UIVisualEffectView.class] || view.hidden || CGRectGetHeight(view.frame) <= 30) continue;
+        if ([XHSNativeLegacy isGlassView:view] || view.hidden || CGRectGetHeight(view.frame) <= 30) continue;
         if (!row || CGRectGetMinY(view.frame) > CGRectGetMinY(row.frame)) row = view;
     }
     if (!row) return;
     [self clearBackground:row];
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy applySoftEdgeFadeOn:bar key:&kNoteTopFadeKey fromTop:YES extraHeight:14];
+    }
 
     UIView *back = nil, *author = nil;
     for (UIView *view in row.subviews) {
@@ -824,7 +897,7 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
     [self clearBackground:content];
     UIView *stack = nil;
     for (UIView *view in content.subviews) {
-        if ([view isKindOfClass:UIVisualEffectView.class]) continue;
+        if ([XHSNativeLegacy isGlassView:view]) continue;
         if ([view isKindOfClass:UIStackView.class]) stack = stack ?: view;
         // 顶上那条分隔线：不到 1pt 高，里面没东西
         else if (!view.subviews.count && CGRectGetHeight(view.frame) > 0 && CGRectGetHeight(view.frame) <= 1 && !view.hidden) view.hidden = YES;
@@ -876,6 +949,9 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
     }
     [self plateOn:bar key:&kNoteBottomKey below:stack frame:left bar:kXHSNativeBarNoteBottom];
     [self plateOn:bar key:&kNoteBottomRightKey below:stack frame:right bar:kXHSNativeBarNoteBottom];
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy adjustNoteBottomInStack:stack];
+    }
 }
 
 + (void)layoutNotePage:(UIViewController *)page {
@@ -895,27 +971,33 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
         [list _setVisibleRectEdgeInsets:reach];
 
     // 顶栏下面的 soft 边缘，见 XHSNativeSoftEdge；底部不要边缘效果，胶囊直接浮在正文上
-    XHSNativeSoftEdge *edge = objc_getAssociatedObject(list, &kNoteEdgeKey);
-    if (!edge) {
-        edge = [XHSNativeSoftEdge new];
-        edge.userInteractionEnabled = NO;
-        edge.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
-        edge.topEdgeEffect.style = UIScrollEdgeEffectStyle.softStyle;
-        UIScrollEdgeElementContainerInteraction *interaction = [UIScrollEdgeElementContainerInteraction new];
-        interaction.edge = UIRectEdgeTop;
-        interaction.scrollView = edge;
-        [top addInteraction:interaction];
-        [list addObserver:edge forKeyPath:@"contentOffset" options:0 context:NULL];
-        objc_setAssociatedObject(list, &kNoteEdgeKey, edge, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if ([XHSNativeLegacy isLiquidGlassOS]) {
+        XHSNativeSoftEdge *edge = objc_getAssociatedObject(list, &kNoteEdgeKey);
+        if (!edge) {
+            edge = [XHSNativeSoftEdge new];
+            edge.userInteractionEnabled = NO;
+            edge.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+            id edgeObj = [edge valueForKey:@"topEdgeEffect"];
+            Class styleClass = NSClassFromString(@"UIScrollEdgeEffectStyle");
+            if (edgeObj && styleClass) [edgeObj setValue:((id (*)(id, SEL))objc_msgSend)(styleClass, NSSelectorFromString(@"softStyle")) forKey:@"style"];
+            Class intClass = NSClassFromString(@"UIScrollEdgeElementContainerInteraction");
+            id interaction = [intClass new];
+            ((void (*)(id, SEL, UIRectEdge))objc_msgSend)(interaction, @selector(setEdge:), UIRectEdgeTop);
+            ((void (*)(id, SEL, id))objc_msgSend)(interaction, @selector(setScrollView:), edge);
+            [top addInteraction:interaction];
+            [list addObserver:edge forKeyPath:@"contentOffset" options:0 context:NULL];
+            objc_setAssociatedObject(list, &kNoteEdgeKey, edge, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (edge.superview != root) [root insertSubview:edge belowSubview:top];
+        if (!CGRectEqualToRect(edge.frame, top.frame)) {
+            edge.frame = top.frame;
+            edge.contentSize = top.frame.size;
+            edge.contentInset = UIEdgeInsetsMake(CGRectGetHeight(top.frame), 0, 0, 0);
+        }
+        [edge follow:list];
+        id bottomEdge = [list valueForKey:@"bottomEdgeEffect"];
+        if (bottomEdge && ![[bottomEdge valueForKey:@"hidden"] boolValue]) [bottomEdge setValue:@YES forKey:@"hidden"];
     }
-    if (edge.superview != root) [root insertSubview:edge belowSubview:top];
-    if (!CGRectEqualToRect(edge.frame, top.frame)) {
-        edge.frame = top.frame;
-        edge.contentSize = top.frame.size;
-        edge.contentInset = UIEdgeInsetsMake(CGRectGetHeight(top.frame), 0, 0, 0);
-    }
-    [edge follow:list];
-    if (!list.bottomEdgeEffect.hidden) list.bottomEdgeEffect.hidden = YES;
 
     [self layoutNoteTop:top];
     [self layoutNoteBottom:bottom];
@@ -985,8 +1067,12 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
 
 static char kVideoLeftKey, kVideoRightKey, kVideoBottomKey;
 
-static void darken(UIVisualEffectView *glass) {
-    if (glass.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) glass.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+static void darken(UIView *glass) {
+    if ([XHSNativeLegacy isLiquidGlassOS]) {
+        if (glass.overrideUserInterfaceStyle != UIUserInterfaceStyleDark) glass.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    } else {
+        [XHSNativeLegacy darkenGlass:glass];
+    }
 }
 
 + (void)layoutVideoHead:(UIView *)head {
@@ -995,7 +1081,7 @@ static void darken(UIVisualEffectView *glass) {
     CGRect left = CGRectNull, right = CGRectNull;
     UIView *lowest = nil;
     for (UIView *view in head.subviews) {
-        if ([view isKindOfClass:UIVisualEffectView.class]) continue;
+        if ([XHSNativeLegacy isGlassView:view]) continue;
         lowest = lowest ?: view;
         if (![view isKindOfClass:UIControl.class] || ![self isVisible:view]) continue;
         if (CGRectGetMidX(view.frame) < middle) left = CGRectUnion(left, view.frame);
@@ -1014,7 +1100,7 @@ static void darken(UIVisualEffectView *glass) {
     CGRect row = CGRectNull;
     UIView *lowest = nil;
     for (UIView *view in bar.subviews) {
-        if ([view isKindOfClass:UIVisualEffectView.class]) continue;
+        if ([XHSNativeLegacy isGlassView:view]) continue;
         lowest = lowest ?: view;
         if (![self isVisible:view]) continue;
         row = CGRectUnion(row, view.frame);
@@ -1075,9 +1161,13 @@ static void darken(UIVisualEffectView *glass) {
 
     [rows addObject:row(@"label", rowTitle(@"液态玻璃"), @"glass.heading")];
     [rows addObject:gap(8)];
-    for (NSArray *option in @[@[@"视频", kXHSNativeGlassVideo], @[@"搜索栏", kXHSNativeGlassSearch], @[@"图文笔记", kXHSNativeGlassNote],
-                              @[@"消息顶栏", kXHSNativeGlassMessages], @[@"评论输入栏", kXHSNativeGlassComments],
-                              @[@"私聊输入栏", kXHSNativeGlassChat], @[@"个人页顶栏", kXHSNativeGlassProfile]])
+    NSArray *glassOptions = [XHSNativeLegacy isLiquidGlassOS]
+        ? @[@[@"视频", kXHSNativeGlassVideo], @[@"搜索栏", kXHSNativeGlassSearch], @[@"图文笔记", kXHSNativeGlassNote],
+            @[@"消息顶栏", kXHSNativeGlassMessages], @[@"评论输入栏", kXHSNativeGlassComments],
+            @[@"私聊输入栏", kXHSNativeGlassChat], @[@"个人页顶栏", kXHSNativeGlassProfile]]
+        : @[@[@"视频", kXHSNativeGlassVideo], @[@"图文笔记", kXHSNativeGlassNote],
+            @[@"评论输入栏", kXHSNativeGlassComments], @[@"个人页顶栏", kXHSNativeGlassProfile]];
+    for (NSArray *option in glassOptions)
         [rows addObject:switchRow(option[0], [config boolForKey:option[1]], [@"pref." stringByAppendingString:option[1]])];
     [rows addObject:gap(8)];
     [rows addObject:row(@"label", rowTitle(@"下次进入页面时生效。"), @"glass.note")];
@@ -1085,6 +1175,10 @@ static void darken(UIVisualEffectView *glass) {
 
     [rows addObject:row(@"label", rowTitle(@"不透明度"), @"fillHeading")];
     [rows addObject:gap(8)];
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        id blurTitle = with(rowTitle(@"模糊程度"), @"setTrailing", [NSString stringWithFormat:@"%.0f%%", config.blurPercent]);
+        [rows addObject:row(@"arrow", blurTitle, @"blur")];
+    }
     for (NSArray *bar in glassBars()) {
         id title = with(rowTitle(bar[0]), @"setTrailing", [NSString stringWithFormat:@"%.0f%%", [config fillForBar:bar[1]]]);
         [rows addObject:row(@"arrow", title, [@"fill." stringByAppendingString:bar[1]])];
@@ -1103,20 +1197,23 @@ static void darken(UIVisualEffectView *glass) {
 
 // 选不透明度：0% 是纯玻璃，越大越不透
 + (NSArray *)percentRowsForBar:(NSString *)bar {
-    NSInteger current = (NSInteger)[XHSNativeConfig.shared fillForBar:bar];
+    BOOL isBlur = [bar isEqualToString:@"blur"];
+    NSInteger current = (NSInteger)(isBlur ? XHSNativeConfig.shared.blurPercent : [XHSNativeConfig.shared fillForBar:bar]);
     NSMutableArray *rows = [NSMutableArray arrayWithObject:gap(12)];
     for (NSInteger percent = 0; percent <= 100; percent += 10) {
         id title = withFlag(rowTitle([NSString stringWithFormat:@"%ld%%", (long)percent]), @"setSelected", percent == current);
         [rows addObject:row(@"selector", title, [NSString stringWithFormat:@"percent.%ld", (long)percent])];
     }
     [rows addObject:gap(8)];
-    [rows addObject:row(@"label", rowTitle(@"0% 是纯玻璃，数值越大越不透。"), @"note")];
+    NSString *note = isBlur ? @"0% 无模糊，数值越大越模糊。" : @"0% 是纯玻璃，数值越大越不透。";
+    [rows addObject:row(@"label", rowTitle(note), @"note")];
     return rows;
 }
 
 + (NSString *)titleForMode:(NSString *)mode {
     if (!mode) return @"XHSNative";
     if ([mode isEqualToString:@"order"]) return @"标签顺序";
+    if ([mode isEqualToString:@"blur"]) return @"模糊程度";
     for (NSArray *bar in glassBars())
         if ([bar[1] isEqualToString:mode]) return [bar[0] stringByAppendingString:@"不透明度"];
     return @"XHSNative";
@@ -1134,8 +1231,8 @@ static void darken(UIVisualEffectView *glass) {
     NSCalendar *calendar = [[NSCalendar alloc] initWithCalendarIdentifier:NSCalendarIdentifierGregorian];
     NSInteger year = [calendar component:NSCalendarUnitYear fromDate:NSDate.date];
     NSString *copyright = [NSString stringWithFormat:@"© %ld huamidev. All rights reserved.", (long)year];
-    NSArray *lines = @[@"XHSNative", @"Version: " XHSNativeVersion, @"Developed by huami1314", copyright];
-    CGFloat opacity[] = {0.8, 0.56, 0.56 * 0.7, 0.56 * 0.5};
+    NSArray *lines = @[@"XHSNative", @"Version: " XHSNativeVersion, @"Developed by huami1314", @"低系统仿液态适配：By:Junhong", copyright];
+    CGFloat opacity[] = {0.8, 0.56, 0.56 * 0.7, 0.56 * 0.65, 0.56 * 0.5};
     for (NSUInteger i = 0; i < lines.count; i++) {
         UILabel *label = [UILabel new];
         label.text = lines[i];
@@ -1151,12 +1248,14 @@ static void darken(UIVisualEffectView *glass) {
 
 + (void)handleTap:(NSString *)identity onPage:(XHSNativeSettingsPage *)page {
     XHSNativeConfig *config = XHSNativeConfig.shared;
-    if ([identity isEqualToString:@"order"] || [identity hasPrefix:@"fill."]) {
+    if ([identity isEqualToString:@"order"] || [identity isEqualToString:@"blur"] || [identity hasPrefix:@"fill."]) {
         XHSNativeSettingsPage *next = [[objc_getClass("XHSNativeSettingsPage") alloc] init];
         next.mode = [identity hasPrefix:@"fill."] ? [identity substringFromIndex:5] : identity;
         [page.navigationController pushViewController:next animated:YES];
     } else if ([identity hasPrefix:@"percent."]) {
-        [config setFill:[identity substringFromIndex:8].doubleValue forBar:page.mode];
+        double value = [identity substringFromIndex:8].doubleValue;
+        if ([page.mode isEqualToString:@"blur"]) [config setBlurPercent:value];
+        else [config setFill:value forBar:page.mode];
         [self applySettings];
         [page.navigationController popViewControllerAnimated:YES];
     } else if ([identity isEqualToString:@"reset"]) {
@@ -1177,6 +1276,7 @@ static void darken(UIVisualEffectView *glass) {
 + (void)applySettings {
     [self rebuildTabs];
     [XHSNativeConfig.shared.homeBar setNeedsLayout];
+    if (![XHSNativeLegacy isLiquidGlassOS]) [XHSNativeLegacy refreshAllPlates];
 }
 
 #pragma mark - iOS 27.1 以下

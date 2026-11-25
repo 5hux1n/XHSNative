@@ -11,6 +11,7 @@
 #import "XHSNativeConfig.h"
 #import "XHSNativeHeaders.h"
 #import "XHSNativeHelper.h"
+#import "XHSNativeLegacy.h"
 
 #pragma mark - 底栏
 
@@ -20,18 +21,36 @@
 
 // 小红书把系统底栏刷成不透明的白底（换主题时还会再刷），页面因此被截在底栏上方。
 // 它刷的时机很散，直接在底栏的这几个入口上拦，保持系统默认的悬浮样子
+%group XHSNativeCommon
+
 %hook UITabBar
 
 - (void)setStandardAppearance:(UITabBarAppearance *)appearance {
-    %orig([XHSNativeHelper isOurTabBar:self] ? [UITabBarAppearance new] : appearance);
+    if ([XHSNativeHelper isOurTabBar:self]) {
+        UITabBarAppearance *clean = [UITabBarAppearance new];
+        if (![XHSNativeLegacy isLiquidGlassOS]) [clean configureWithTransparentBackground];
+        %orig(clean);
+    } else {
+        %orig;
+    }
 }
 
 - (void)setScrollEdgeAppearance:(UITabBarAppearance *)appearance {
-    %orig([XHSNativeHelper isOurTabBar:self] ? nil : appearance);
+    if ([XHSNativeHelper isOurTabBar:self]) {
+        if (![XHSNativeLegacy isLiquidGlassOS]) {
+            UITabBarAppearance *clean = [UITabBarAppearance new];
+            [clean configureWithTransparentBackground];
+            %orig(clean);
+        } else {
+            %orig(nil);
+        }
+    } else {
+        %orig;
+    }
 }
 
 - (void)setBackgroundColor:(UIColor *)color {
-    %orig([XHSNativeHelper isOurTabBar:self] ? nil : color);
+    %orig([XHSNativeHelper isOurTabBar:self] ? ([XHSNativeLegacy isLiquidGlassOS] ? nil : UIColor.clearColor) : color);
 }
 
 - (void)setBackgroundImage:(UIImage *)image {
@@ -46,6 +65,11 @@
     %orig(translucent || [XHSNativeHelper isOurTabBar:self]);
 }
 
+- (void)layoutSubviews {
+    %orig;
+    [XHSNativeLegacy layoutLegacyTabBar:self];
+}
+
 %end
 
 // UIKit 开始拖动前会检查 UITabBarItem，即使对应的 UITab 仍是启用状态。
@@ -57,13 +81,18 @@
 
 %end
 
+static BOOL gInMeBadge;
+static BOOL gInShowBadgeForTabId;
+
 %hook XYTabbarController
 
 - (void)xy_suppressSystemTabBarContentIfNeeded {
+    if ([XHSNativeLegacy isLiquidGlassOS]) return;
+    %orig;
 }
 
 - (BOOL)xy_shouldSkipSystemTabBarFrameAdjustment {
-    return YES;
+    return [XHSNativeLegacy isLiquidGlassOS] ? YES : %orig;
 }
 
 - (void)viewDidLoad {
@@ -72,15 +101,36 @@
     self.tabBar.unselectedItemTintColor = UIColor.labelColor;
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy setLegacyTabBarMinimized:NO];
+        [self.tabBar setNeedsLayout];
+        [XHSNativeLegacy layoutLegacyTabBar:self.tabBar];
+    }
+}
+
 - (void)viewDidLayoutSubviews {
     %orig;
-    UIView *legacy = [self customtabBar];
-    if (legacy.alpha > 0 && [XHSNativeHelper tabNamed:@"index"]) legacy.alpha = 0;
-    if (XHSNativeConfig.shared.tabsDirty && !self.isTabBarHidden) [XHSNativeHelper rebuildTabs];
+    UIView *legacy = [self respondsToSelector:@selector(customtabBar)] ? [self customtabBar] : nil;
+    BOOL active = [XHSNativeLegacy isLiquidGlassOS] ? ([XHSNativeHelper tabNamed:@"index"] != nil) : (XHSNativeConfig.shared.pages.count > 0);
+    if (active && legacy) {
+        if (legacy.alpha > 0) legacy.alpha = 0;
+        if (![XHSNativeLegacy isLiquidGlassOS]) {
+            legacy.hidden = YES;
+            legacy.userInteractionEnabled = NO;
+        }
+    }
+    if (XHSNativeConfig.shared.tabsDirty && ![XHSNativeLegacy isControllerTabBarHidden:self]) [XHSNativeHelper rebuildTabs];
+    [XHSNativeLegacy layoutLegacyTabBar:self.tabBar];
 }
 
 - (void)setViewControllers:(NSArray<UIViewController *> *)pages animated:(BOOL)animated {
     XHSNativeConfig *config = XHSNativeConfig.shared;
+    if (config.rebuilding) {
+        %orig;
+        return;
+    }
     config.pages = nil;
     %orig;
     NSMutableArray<NSString *> *names = [NSMutableArray array];
@@ -113,43 +163,98 @@
 - (void)setSelectedIndex:(NSUInteger)index {
     XHSNativeConfig *config = XHSNativeConfig.shared;
     if (!config.pages || index >= config.pages.count || ![XHSNativeHelper isAppAddress:__builtin_return_address(0)]) return %orig;
-    UITab *tab = [XHSNativeHelper tabNamed:config.pageNames[index]];
-    if (tab) self.selectedTab = tab;  // 找不到说明这个标签被用户藏了
+    if ([XHSNativeLegacy isLiquidGlassOS]) {
+        UITab *tab = [XHSNativeHelper tabNamed:config.pageNames[index]];
+        if (tab) self.selectedTab = tab;  // 找不到说明这个标签被用户藏了
+    } else {
+        UIViewController *page = [XHSNativeLegacy legacyPageForName:config.pageNames[index]];
+        if (page) self.selectedViewController = page;
+    }
 }
 
 - (void)setSelectedViewController:(UIViewController *)page {
     XHSNativeConfig *config = XHSNativeConfig.shared;
     NSUInteger index = config.pages ? [config.pages indexOfObjectIdenticalTo:page] : NSNotFound;
-    if (index != NSNotFound && !config.rebuilding && ![XHSNativeHelper tabNamed:config.pageNames[index]]) return;
+    if (index != NSNotFound && !config.rebuilding) {
+        BOOL allowed = [XHSNativeLegacy isLiquidGlassOS]
+            ? ([XHSNativeHelper tabNamed:config.pageNames[index]] != nil)
+            : ([XHSNativeLegacy legacyPageForName:config.pageNames[index]] != nil);
+        if (!allowed) return;
+    }
     %orig;
 }
 
 // 角标的下标是按它自己那条底栏算的，中间还夹着加号，所以按名字找回对应的标签
 - (void)setBadgeValue:(NSString *)value forItemAtIndex:(NSInteger)index {
-    %orig;
+    XHSNativeConfig *config = XHSNativeConfig.shared;
+    if ([XHSNativeLegacy isLiquidGlassOS]) {
+        %orig;
+        NSArray *names = [XHSNativeHelper legacyTabNames:self];
+        if (self != config.tabBarController || index < 0 || index >= (NSInteger)names.count) return;
+        UITab *tab = [XHSNativeHelper tabNamed:names[index]];
+        if (!tab) return;
+        tab.badgeValue = value;
+        [XHSNativeHelper refreshBadge:tab.viewController.tabBarItem];
+        return;
+    }
+
     NSArray *names = [XHSNativeHelper legacyTabNames:self];
-    if (self != XHSNativeConfig.shared.tabBarController || index < 0 || index >= (NSInteger)names.count) return;
-    UITab *tab = [XHSNativeHelper tabNamed:names[index]];
-    if (!tab) return;
-    tab.badgeValue = value;
-    [XHSNativeHelper refreshBadge:tab.viewController.tabBarItem];
+    NSInteger targetIndex = index;
+    if (self == config.tabBarController && [config isTabHidden:@"shopping"] &&
+        ![names containsObject:@"shopping"] && index == 3 && !gInMeBadge && !gInShowBadgeForTabId) {
+        NSUInteger msgIdx = [names indexOfObject:@"message"];
+        if (msgIdx != NSNotFound) targetIndex = (NSInteger)msgIdx;
+    }
+    %orig(value, targetIndex);
+    if (self != config.tabBarController || targetIndex < 0 || targetIndex >= (NSInteger)names.count) return;
+    NSDictionary<NSNumber *, NSString *> *badgeDict = [self respondsToSelector:@selector(badgeValueDict)] ? self.badgeValueDict : nil;
+    for (NSUInteger i = 0; i < config.pageNames.count; i++) {
+        NSString *name = config.pageNames[i];
+        NSUInteger legacyIdx = [names indexOfObject:name];
+        if (legacyIdx == NSNotFound) continue;
+        id raw = (legacyIdx == (NSUInteger)targetIndex) ? value : badgeDict[@(legacyIdx)];
+        NSString *badge = ([raw isKindOfClass:NSString.class] && [raw length]) ? raw : nil;
+        UIViewController *page = [XHSNativeLegacy legacyPageForName:name];
+        if (!page) continue;
+        page.tabBarItem.badgeValue = badge;
+        [XHSNativeHelper refreshBadge:page.tabBarItem];
+    }
 }
 
 - (void)setCustomTabBarHidden:(BOOL)hidden animated:(BOOL)animated {
     %orig;
-    [self setTabBarHidden:hidden animated:animated];
+    if ([self respondsToSelector:@selector(setTabBarHidden:animated:)]) {
+        ((void (*)(id, SEL, BOOL, BOOL))objc_msgSend)(self, @selector(setTabBarHidden:animated:), hidden, animated);
+    } else {
+        self.tabBar.hidden = hidden;
+    }
 }
 
 %end
 
 %hook XYPHHomeTabbarController
 
+- (void)showMeBadge:(id)badge {
+    gInMeBadge = YES;
+    %orig;
+    gInMeBadge = NO;
+}
+
+- (void)hideMeBadge:(id)badge {
+    gInMeBadge = YES;
+    %orig;
+    gInMeBadge = NO;
+}
+
 - (void)showBadgeWithValue:(NSString *)value forTabBarId:(NSString *)name {
-    if (self == XHSNativeConfig.shared.tabBarController && [XHSNativeHelper tabNamed:@"index"] && name.length) {
+    BOOL active = [XHSNativeLegacy isLiquidGlassOS] ? ([XHSNativeHelper tabNamed:@"index"] != nil) : (XHSNativeConfig.shared.pages.count > 0);
+    if (self == XHSNativeConfig.shared.tabBarController && active && name.length) {
         NSArray *names = [XHSNativeHelper legacyTabNames:self];
         NSUInteger index = [names indexOfObject:name];
         if (names && index != NSNotFound) {
+            gInShowBadgeForTabId = YES;
             [self setBadgeValue:value forItemAtIndex:index];
+            gInShowBadgeForTabId = NO;
             return;
         }
     }
@@ -157,13 +262,33 @@
 }
 
 - (id<UIViewControllerAnimatedTransitioning>)tabBarController:(UITabBarController *)controller animationControllerForTransitionFromViewController:(UIViewController *)from toViewController:(UIViewController *)to {
-    if (controller == self && [XHSNativeHelper tabNamed:@"index"]) return nil;
+    BOOL active = [XHSNativeLegacy isLiquidGlassOS] ? ([XHSNativeHelper tabNamed:@"index"] != nil) : (XHSNativeConfig.shared.pages.count > 0);
+    if (controller == self && active) return nil;
     return %orig;
+}
+
+static char kPrevSelectedVCKey;
+
+- (BOOL)tabBarController:(UITabBarController *)controller shouldSelectViewController:(UIViewController *)viewController {
+    if (![XHSNativeLegacy isLiquidGlassOS] && controller == self) {
+        objc_setAssociatedObject(self, &kPrevSelectedVCKey, self.selectedViewController, OBJC_ASSOCIATION_ASSIGN);
+    }
+    return %orig;
+}
+
+- (void)tabBarController:(UITabBarController *)controller didSelectViewController:(UIViewController *)viewController {
+    UIViewController *previous = objc_getAssociatedObject(self, &kPrevSelectedVCKey);
+    objc_setAssociatedObject(self, &kPrevSelectedVCKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    %orig;
+    if (![XHSNativeLegacy isLiquidGlassOS] && controller == self && previous && viewController == previous) {
+        [XHSNativeHelper reselectTab:viewController];
+    }
 }
 
 %new
 - (BOOL)tabBarController:(UITabBarController *)controller shouldSelectTab:(UITab *)tab {
-    if ([tab isKindOfClass:UISearchTab.class]) {
+    Class searchTabClass = NSClassFromString(@"UISearchTab");
+    if (searchTabClass && [tab isKindOfClass:searchTabClass]) {
         if (XHSNativeConfig.shared.isPublishSwapped) [XHSNativeHelper openPublish];
         else [XHSNativeHelper openSearch];
         return NO;
@@ -198,7 +323,11 @@
 
 %end
 
-// 官方给折叠屏写的那几处玻璃适配（搜索框、消息页导航栏等）顺带打开
+%end
+
+// 官方给折叠屏写的那几处玻璃适配（搜索框、消息页导航栏等）顺带打开（仅 iOS 26+）
+%group XHSNativeIOS26
+
 %hook XYLiquidGlass
 
 - (BOOL)enable {
@@ -224,18 +353,6 @@
 
 - (BOOL)homeLiquidGlassEnabled {
     return YES;
-}
-
-- (NSUInteger)defaultLandingTabPage {
-    return [XHSNativeHelper landingChannel:%orig ofHome:self];
-}
-
-%end
-
-%hook XYMHomeDataSource
-
-- (NSArray *)childViewModels {
-    return [XHSNativeHelper visibleChannels:%orig];
 }
 
 %end
@@ -273,6 +390,26 @@
 
 - (void)setHidden:(BOOL)hidden {
     %orig(hidden && ![XHSNativeHelper isPinnedEdgeEffect:self]);
+}
+
+%end
+
+%end
+
+%group XHSNativeCommon
+
+%hook XYMHomeViewController
+
+- (NSUInteger)defaultLandingTabPage {
+    return [XHSNativeHelper landingChannel:%orig ofHome:self];
+}
+
+%end
+
+%hook XYMHomeDataSource
+
+- (NSArray *)childViewModels {
+    return [XHSNativeHelper visibleChannels:%orig];
 }
 
 %end
@@ -410,9 +547,12 @@
 %hook XYPMMessageCenterViewController
 - (void)configureNavigationBarLiquidGlass {
     %orig;
-    if (![XHSNativeConfig.shared boolForKey:kXHSNativeGlassMessages] || [self valueForKey:@"navigationGlassView"]) return;
-    for (UIBarButtonItem *item in self.navigationItem.rightBarButtonItems)
-        item.hidesSharedBackground = NO;
+    if (![XHSNativeLegacy isLiquidGlassOS] || ![XHSNativeConfig.shared boolForKey:kXHSNativeGlassMessages] || [self valueForKey:@"navigationGlassView"]) return;
+    for (UIBarButtonItem *item in self.navigationItem.rightBarButtonItems) {
+        if ([item respondsToSelector:NSSelectorFromString(@"setHidesSharedBackground:")]) {
+            item.hidesSharedBackground = NO;
+        }
+    }
 }
 - (void)viewDidLayoutSubviews {
     %orig;
@@ -429,6 +569,10 @@
 
 #pragma mark - 搜索页
 
+%end
+
+%group XHSNativeSearchIOS26
+
 %hook XYNativeSearchBar
 - (void)didMoveToWindow {
     %orig;
@@ -442,11 +586,19 @@
 }
 %end
 
+%end
+
 #pragma mark - 个人页
+
+%group XHSNativeCommon
 
 %hook XYPFProfileV2NavigationBar
 - (void)layoutSubviews {
     %orig;
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy layoutProfileBar:self];
+        return;
+    }
     static char leftKey, rightKey;
     UIView *menu = [self homeMenuButton];
     BOOL enabled = [XHSNativeConfig.shared boolForKey:kXHSNativeGlassProfile] && ![self usesDuoNavigation] && [XHSNativeHelper isVisible:menu] && menu.superview == self;
@@ -471,6 +623,10 @@
 
 #pragma mark - 私聊输入栏
 
+%end
+
+%group XHSNativeChatIOS26
+
 %hook XYChatBarLayout
 - (BOOL)usesGlassAppearance {
     if (%orig) return YES;
@@ -482,7 +638,11 @@
 }
 %end
 
+%end
+
 #pragma mark - 评论半屏
+
+%group XHSNativeCommon
 
 %hook XYCommentHalfBar
 - (void)layoutSubviews {
@@ -663,24 +823,27 @@
 
 %end
 
+%end
+
 %ctor {
     // 只在小红书里生效。重签名常会改包名，所以再认一下可执行文件名
     NSBundle *bundle = NSBundle.mainBundle;
     if (![bundle.bundleIdentifier hasPrefix:@"com.xingin.discover"] && ![[bundle objectForInfoDictionaryKey:@"CFBundleExecutable"] isEqual:@"discover"]) return;
-    // 液态玻璃是 iOS 26 的东西，更早的系统保持原样
-    if (NSProcessInfo.processInfo.operatingSystemVersion.majorVersion < 26) return;
 
-    [XHSNativeHelper patchOlderSystems];
-    %init(XYChatBarLayout = objc_getClass("XYMessageUIKit.XYPMMessageShortcutBarLayoutViewController"),
-          XYCommentHalfBar = objc_getClass("_TtCC12XYNoteModule32CommentHalflayerBottomController4View"),
-          XYNativeSearchBar = objc_getClass("XYSearchBar.XYSearchBarV2"),
-          XYDeviceUtility = objc_getClass("XYUIKit.DeviceUtility"),
+    if ([XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeHelper patchOlderSystems];
+        %init(XHSNativeIOS26, XYDeviceUtility = objc_getClass("XYUIKit.DeviceUtility"));
+        %init(XHSNativeSearchIOS26, XYNativeSearchBar = objc_getClass("XYSearchBar.XYSearchBarV2"));
+        %init(XHSNativeChatIOS26, XYChatBarLayout = objc_getClass("XYMessageUIKit.XYPMMessageShortcutBarLayoutViewController"));
+    }
+    %init(XHSNativeCommon,
           XYMHomeDataSource = objc_getClass("XYHomeModule.XYMHomeDataSource"),
           XYMainFrameEntranceConfig = objc_getClass("XYHomeModule.MainFrameEntranceConfigManager"),
           XYMainFrameLeftCache = objc_getClass("XYModuleInterface.MainFrameLeftCacheModel"),
           XYHomeDotsSwipeInstaller = objc_getClass("XYHomeModule.HomeDotsSwipeInstaller"),
           XYHomeService = objc_getClass("XYHomeModule.HomeServiceImp"),
           XYMarketRootInterface = objc_getClass("XYShopping.MarketRootInterface"),
+          XYCommentHalfBar = objc_getClass("_TtCC12XYNoteModule32CommentHalflayerBottomController4View"),
           XYNoteDetailPage = objc_getClass("XYNoteModule.NoteDetailPageInterface"),
           XYNoteDirectionView = objc_getClass("XYNoteModule.NoteDirectionView"),
           XYNoteImageView = objc_getClass("XYNoteModule.NoteImageView"),
