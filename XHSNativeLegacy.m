@@ -826,7 +826,6 @@ static void applyHomeTopInset(UIView *view, CGFloat targetTop, CGFloat topNeed) 
     if (enabled && rightBtns.count && barW > 0) {
         CGFloat x = barW - 14;
         CGRect group = CGRectNull;
-        UIView *first = nil;
         for (NSInteger idx = (NSInteger)rightBtns.count - 1; idx >= 0; idx--) {
             UIView *btn = rightBtns[idx];
             CGSize sz = btn.bounds.size;
@@ -834,12 +833,19 @@ static void applyHomeTopInset(UIView *view, CGFloat targetTop, CGFloat topNeed) 
             x -= sz.width;
             CGRect f = CGRectMake(x, y + (h - sz.height) / 2, sz.width, sz.height);
             if (!CGRectEqualToRect(btn.frame, f)) btn.frame = f;
-            first = btn;
             group = CGRectUnion(group, f);
             x -= 8;
         }
-        if (first && !CGRectIsNull(group)) {
-            [self plateOn:bar key:&rightKey below:first frame:CGRectInset(group, -6, -6) bar:kXHSNativeBarProfile];
+        // 取 bar.subviews 中层级最靠下的按钮作为 below 目标，避免玻璃底板盖住其他按钮（如 share）
+        UIView *lowest = nil;
+        for (UIView *sub in bar.subviews) {
+            if ([rightBtns containsObject:sub]) {
+                lowest = sub;
+                break;
+            }
+        }
+        if (lowest && !CGRectIsNull(group)) {
+            [self plateOn:bar key:&rightKey below:lowest frame:CGRectInset(group, -6, -6) bar:kXHSNativeBarProfile];
         } else {
             ((UIView *)objc_getAssociatedObject(bar, &rightKey)).hidden = YES;
         }
