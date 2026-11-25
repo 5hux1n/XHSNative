@@ -947,8 +947,13 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
         setOffset(fieldGroup, margin + 6 - CGRectGetMinX(row) - CGRectGetMinX(layoutFrame(fieldGroup)), 0);
         setOffset(buttons, CGRectGetMaxX(right) - padding - CGRectGetMinX(row) - CGRectGetMaxX(layoutFrame(buttons)), 0);
     }
-    [self plateOn:bar key:&kNoteBottomKey below:stack frame:left bar:kXHSNativeBarNoteBottom];
-    [self plateOn:bar key:&kNoteBottomRightKey below:stack frame:right bar:kXHSNativeBarNoteBottom];
+    UIView *leftGlass = [self plateOn:content key:&kNoteBottomKey below:stack frame:left bar:kXHSNativeBarNoteBottom];
+    UIView *rightGlass = [self plateOn:content key:&kNoteBottomRightKey below:stack frame:right bar:kXHSNativeBarNoteBottom];
+    for (UIView *view in [content.subviews copy]) {
+        if (view != leftGlass && view != rightGlass && [XHSNativeLegacy isGlassView:view]) {
+            [view removeFromSuperview];
+        }
+    }
     if (![XHSNativeLegacy isLiquidGlassOS]) {
         [XHSNativeLegacy adjustNoteBottomInStack:stack];
     }
