@@ -167,7 +167,7 @@
         [XHSNativeHelper openSearch];
         return NO;
     }
-    // 已选中还点它要放行，让 didSelect 收到重选；小红书自己的 shouldSelect 可能会把这一下拦掉
+    // 重选要放行，didSelect 才收得到；小红书自己的 shouldSelect 可能会把它拦掉
     if (tab == controller.selectedTab) return YES;
     if (![self respondsToSelector:@selector(tabBarController:shouldSelectViewController:)]) return YES;
     return [self tabBarController:controller shouldSelectViewController:tab.viewController];
@@ -177,9 +177,7 @@
 - (void)tabBarController:(UITabBarController *)controller didSelectTab:(UITab *)tab previousTab:(UITab *)previous {
     if ([self respondsToSelector:@selector(tabBarController:didSelectViewController:)])
         [self tabBarController:controller didSelectViewController:tab.viewController];
-    // 重选同一个标签，把这一下补发给自绘底栏对应按钮，走它原厂逻辑
-    if (previous && [tab.identifier isEqualToString:previous.identifier])
-        [XHSNativeHelper tapLegacyTabNamed:tab.identifier];
+    if (tab == previous) [XHSNativeHelper reselectTab:tab];
 }
 
 %end
