@@ -9,9 +9,13 @@
 
 NSString *const kXHSNativeSearchTab = @"XHSNative.searchTab";
 NSString *const kXHSNativeSwapPublish = @"XHSNative.swapPublish";
+NSString *const kXHSNativeTabTitles = @"XHSNative.tabTitles";
+NSString *const kXHSNativeHideChannelLine = @"XHSNative.hideChannelLine";
 NSString *const kXHSNativeDoubleTapZoom = @"XHSNative.doubleTapZoom";
 NSString *const kXHSNativeMinimize = @"XHSNative.minimize";
 NSString *const kXHSNativeDisableDots = @"XHSNative.disableDots";
+NSString *const kXHSNativeNoWatermark = @"XHSNative.noWatermark";
+NSString *const kXHSNativeIgnoreNoSave = @"XHSNative.ignoreNoSave";
 NSString *const kXHSNativeGlassNote = @"XHSNative.glass.note";
 NSString *const kXHSNativeGlassSearch = @"XHSNative.glass.search";
 NSString *const kXHSNativeGlassComments = @"XHSNative.glass.comments";
@@ -31,6 +35,8 @@ NSString *const kXHSNativeBarProfile = @"profile";
 static NSString *const kTabOrder = @"XHSNative.tabOrder";
 static NSString *const kTabHidden = @"XHSNative.tabHidden";
 static NSString *const kChannelHidden = @"XHSNative.channelHidden";
+static NSString *const kChannelOrder = @"XHSNative.channelOrder";
+static NSString *const kChannelNames = @"XHSNative.channelNames";
 static NSString *const kFillPrefix = @"XHSNative.fill.";
 
 @implementation XHSNativeConfig
@@ -53,6 +59,22 @@ static NSString *const kFillPrefix = @"XHSNative.fill.";
 
 - (BOOL)isDotsDisabled {
     return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeDisableDots];
+}
+
+- (BOOL)isTabTitleShown {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeTabTitles];
+}
+
+- (BOOL)isChannelLineHidden {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeHideChannelLine];
+}
+
+- (BOOL)isNoWatermarkEnabled {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeNoWatermark];
+}
+
+- (BOOL)isSaveRestrictionIgnored {
+    return [NSUserDefaults.standardUserDefaults boolForKey:kXHSNativeIgnoreNoSave];
 }
 
 - (BOOL)isPublishSwapped {
@@ -104,6 +126,33 @@ static NSString *const kFillPrefix = @"XHSNative.fill.";
     [pages removeObject:@(page)];
     if (hidden) [pages addObject:@(page)];
     [defaults setObject:pages forKey:kChannelHidden];
+}
+
+- (NSString *)nameForChannel:(NSUInteger)page {
+    NSString *name = [NSUserDefaults.standardUserDefaults dictionaryForKey:kChannelNames][@(page).stringValue];
+    return [name isKindOfClass:NSString.class] && name.length ? name : nil;
+}
+
+- (void)setName:(NSString *)name forChannel:(NSUInteger)page {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSMutableDictionary *names = [([defaults dictionaryForKey:kChannelNames] ?: @{}) mutableCopy];
+    names[@(page).stringValue] = name.length ? name : nil;
+    [defaults setObject:names forKey:kChannelNames];
+}
+
+// 频道顺序，存的是频道编号。存的不全或有不认识的，按 关注 发现 同城 补齐
+- (NSArray<NSNumber *> *)channelOrder {
+    NSArray<NSNumber *> *all = @[@0, @1, @2];
+    NSMutableArray<NSNumber *> *order = [NSMutableArray array];
+    for (id page in [NSUserDefaults.standardUserDefaults arrayForKey:kChannelOrder])
+        if ([all containsObject:page] && ![order containsObject:page]) [order addObject:page];
+    for (NSNumber *page in all)
+        if (![order containsObject:page]) [order addObject:page];
+    return order;
+}
+
+- (void)setChannelOrder:(NSArray<NSNumber *> *)order {
+    [NSUserDefaults.standardUserDefaults setObject:order forKey:kChannelOrder];
 }
 
 - (CGFloat)fillForBar:(NSString *)bar {

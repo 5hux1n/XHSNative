@@ -1,0 +1,9 @@
+Package: com.huamidev.xhsnative
+Name: XHSNative
+Version: 1.5+1
+Architecture: iphoneos-arm64
+Description: 为小红书提供悬浮液态玻璃底栏、顶栏、笔记与视频控件玻璃效果，支持底栏标签排序、隐藏及玻璃不透明度调节。
+Maintainer: huami1314
+Author: huami1314
+Section: Tweaks
+Depends: mobilesubstrate, firmware (>= 15.0)

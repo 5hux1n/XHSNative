@@ -7,7 +7,6 @@
 //
 #import "XHSNativeHelper.h"
 #import <dlfcn.h>
-#import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
 #import <mach/mach.h>
@@ -83,100 +82,52 @@
 
 #pragma mark - 双击放大
 
-// 笔记页图片的双指放大由 PinchController 处理：开始时把图片截下来放到全屏的遮罩上，
-// 跟着手指缩放和移动，松手弹回。双击时喂给它一个假的双指手势，效果和双指放大一样；
-// 放大后盖一层透明的视图接手势：单指拖动、双指继续缩放，点一下松开，用它自己的弹回动画收起
-
-@interface XHSNativeFakePinch : UIPinchGestureRecognizer
-@property (nonatomic) UIGestureRecognizerState fakeState;
-@property (nonatomic) CGFloat fakeScale;
-@property (nonatomic) CGPoint fakePoint;  // 窗口坐标
-@property (nonatomic, weak) UIView *hostView;
+// 交给笔记图片轮播的一次「单击」。它处理点按时只看手势的 state 和 recognizedTap（1 单击，2 双击）
+@interface XHSNativeSingleTap : NSObject
 @end
 
-@implementation XHSNativeFakePinch
+@implementation XHSNativeSingleTap
 
 - (UIGestureRecognizerState)state {
-    return self.fakeState;
+    return UIGestureRecognizerStateEnded;
 }
 
-- (CGFloat)scale {
-    return self.fakeScale;
-}
-
-- (NSUInteger)numberOfTouches {
-    return 2;
-}
-
-- (UIView *)view {
-    return self.hostView;
-}
-
-- (CGPoint)locationInView:(UIView *)view {
-    return view ? [view convertPoint:self.fakePoint fromView:nil] : self.fakePoint;
+- (NSUInteger)recognizedTap {
+    return 1;
 }
 
 @end
 
-@interface XHSNativePinchHold : NSObject
-@property (nonatomic, strong) id controller;
-@property (nonatomic, strong) XHSNativeFakePinch *pinch;
-@property (nonatomic, strong) UIView *catcher;
-@property (nonatomic) CGPoint start;
-@property (nonatomic) CGFloat baseScale;
-@property (nonatomic, strong) CADisplayLink *link;
-@property (nonatomic) CFTimeInterval beginTime;
-@end
+#pragma mark - 小红书主程序
 
-static XHSNativePinchHold *gPinchHold;
-static const CGFloat kZoomScale = 2.5;
+// 小红书主程序的镜像。不按 MH_EXECUTE 找：用 LiveContainer 这类容器加载时，进程的主程序是容器自己，
+// 小红书是被当成动态库加载进来的。按它里面的类落在哪个镜像来找，两种情况都对
+struct XHSAppImage {
+    const struct mach_header_64 *header;
+    intptr_t slide;
+    uintptr_t textSize;
+};
 
-@implementation XHSNativePinchHold
-
-- (void)send:(UIGestureRecognizerState)state {
-    self.pinch.fakeState = state;
-    [self.controller didReceivePinchWithRecognizer:self.pinch];
+static const struct XHSAppImage *appImage(void) {
+    static struct XHSAppImage app;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Dl_info info;
+        if (!dladdr((__bridge void *)objc_getClass("XYTabbarController"), &info) || !info.dli_fbase) return;
+        const struct mach_header_64 *header = (const struct mach_header_64 *)info.dli_fbase;
+        if (header->magic != MH_MAGIC_64) return;
+        const struct load_command *command = (const struct load_command *)(header + 1);
+        for (uint32_t i = 0; i < header->ncmds; i++, command = (const struct load_command *)((const char *)command + command->cmdsize)) {
+            const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+            if (command->cmd != LC_SEGMENT_64 || strcmp(segment->segname, SEG_TEXT)) continue;
+            app.header = header;
+            app.slide = (intptr_t)header - (intptr_t)segment->vmaddr;
+            app.textSize = segment->vmsize;
+            break;
+        }
+    });
+    return &app;
 }
-
-- (CGFloat)clampScale:(CGFloat)scale {
-    CGFloat limit = [self.controller maxScale] > 1 ? [self.controller maxScale] : kZoomScale;
-    return MAX(1, MIN(limit, scale));
-}
-
-// 从 1 倍放大到 2.5 倍，和手指张开一样逐帧喂
-- (void)grow:(CADisplayLink *)link {
-    if (!self.beginTime) self.beginTime = link.timestamp;
-    CGFloat progress = MIN(1, (link.timestamp - self.beginTime) / 0.25);
-    CGFloat eased = 1 - pow(1 - progress, 3);
-    self.pinch.fakeScale = [self clampScale:1 + (kZoomScale - 1) * eased];
-    [self send:UIGestureRecognizerStateChanged];
-    if (progress < 1) return;
-    [link invalidate];
-    self.link = nil;
-}
-
-- (void)pan:(UIPanGestureRecognizer *)pan {
-    if (pan.state == UIGestureRecognizerStateBegan) self.start = self.pinch.fakePoint;
-    CGPoint move = [pan translationInView:nil];
-    self.pinch.fakePoint = CGPointMake(self.start.x + move.x, self.start.y + move.y);
-    [self send:UIGestureRecognizerStateChanged];
-}
-
-- (void)zoom:(UIPinchGestureRecognizer *)zoom {
-    if (zoom.state == UIGestureRecognizerStateBegan) self.baseScale = self.pinch.fakeScale;
-    self.pinch.fakeScale = [self clampScale:self.baseScale * zoom.scale];
-    [self send:UIGestureRecognizerStateChanged];
-}
-
-- (void)finish {
-    [self.link invalidate];
-    self.link = nil;
-    [self.catcher removeFromSuperview];
-    [self send:UIGestureRecognizerStateEnded];
-    gPinchHold = nil;
-}
-
-@end
 
 #pragma mark - iOS 27.1 以下
 
@@ -205,14 +156,8 @@ __attribute__((naked)) static void layoutRegionBar(void) {
 
 // 在主程序的导入表里按符号名找到对应的指针槽：间接符号表 → 符号表 → 名字
 static void **importSlot(const char *symbol) {
-    const struct mach_header_64 *header = NULL;
-    intptr_t slide = 0;
-    for (uint32_t i = 0; i < _dyld_image_count() && !header; i++) {
-        const struct mach_header_64 *image = (const struct mach_header_64 *)_dyld_get_image_header(i);
-        if (image->magic != MH_MAGIC_64 || image->filetype != MH_EXECUTE) continue;
-        header = image;
-        slide = _dyld_get_image_vmaddr_slide(i);
-    }
+    const struct mach_header_64 *header = appImage()->header;
+    intptr_t slide = appImage()->slide;
     if (!header) return NULL;
 
     const struct symtab_command *symtab = NULL;
@@ -305,10 +250,20 @@ static NSDictionary<NSString *, NSString *> *tabTitles(void) {
     return @{@"index": @"首页", @"shopping": @"市集", @"message": @"消息", @"me": @"我"};
 }
 
+// 首页频道按小红书的 childVCPageName：0 关注 1 发现 2 同城
+static NSArray<NSString *> *channelTitles(void) {
+    return @[@"关注", @"发现", @"同城"];
+}
+
 static NSArray<NSArray *> *glassBars(void) {
-    return @[@[@"首页顶栏", kXHSNativeBarHome], @[@"笔记顶栏", kXHSNativeBarNoteTop], @[@"笔记底栏", kXHSNativeBarNoteBottom],
-             @[@"视频顶栏", kXHSNativeBarVideoTop], @[@"视频底栏", kXHSNativeBarVideoBottom],
-             @[@"评论输入栏", kXHSNativeBarComment], @[@"个人页顶栏", kXHSNativeBarProfile]];
+    NSMutableArray *bars = [@[@[@"首页顶栏", kXHSNativeBarHome], @[@"笔记顶栏", kXHSNativeBarNoteTop], @[@"笔记底栏", kXHSNativeBarNoteBottom],
+                              @[@"视频顶栏", kXHSNativeBarVideoTop], @[@"视频底栏", kXHSNativeBarVideoBottom],
+                              @[@"评论输入栏", kXHSNativeBarComment], @[@"个人页顶栏", kXHSNativeBarProfile]] mutableCopy];
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [bars insertObject:@[@"底部标签栏", kXHSNativeBarTab] atIndex:1];
+        [bars insertObject:@[@"搜索页", kXHSNativeBarSearch] atIndex:2];
+    }
+    return bars;
 }
 
 // 长按底栏「首页」直接呼出插件设置页，双系统共用同一套跳转逻辑
@@ -382,6 +337,10 @@ static NSArray<NSArray *> *glassBars(void) {
 }
 
 + (void)clearBackground:(UIView *)view {
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy clearLegacyBackground:view owner:view];
+        return;
+    }
     if (view.backgroundColor && ![view.backgroundColor isEqual:UIColor.clearColor]) view.backgroundColor = UIColor.clearColor;
 }
 
@@ -397,25 +356,10 @@ static NSArray<NSArray *> *glassBars(void) {
 
 #pragma mark - 小红书
 
-// 这几个方法调用得很频繁，不用 dladdr，先算好主程序代码段的地址范围直接比
+// 这几个方法调用得很频繁，直接和主程序代码段的地址范围比
 + (BOOL)isAppAddress:(void *)address {
-    static uintptr_t start, end;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        for (uint32_t i = 0; i < _dyld_image_count() && !start; i++) {
-            const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(i);
-            if (header->filetype != MH_EXECUTE) continue;
-            const struct load_command *command = (const struct load_command *)(header + 1);
-            for (uint32_t j = 0; j < header->ncmds; j++, command = (const struct load_command *)((const char *)command + command->cmdsize)) {
-                const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
-                if (command->cmd != LC_SEGMENT_64 || strcmp(segment->segname, SEG_TEXT)) continue;
-                start = (uintptr_t)header;
-                end = start + segment->vmsize;
-                break;
-            }
-        }
-    });
-    return (uintptr_t)address >= start && (uintptr_t)address < end;
+    uintptr_t start = (uintptr_t)appImage()->header;
+    return start && (uintptr_t)address >= start && (uintptr_t)address < start + appImage()->textSize;
 }
 
 + (id)themeGlyph:(NSString *)name {
@@ -432,7 +376,7 @@ static NSArray<NSArray *> *glassBars(void) {
     id glyph = [self themeGlyph:name];
     if (![glyph respondsToSelector:NSSelectorFromString(@"size")]) return nil;
     id (^sized)(CGFloat) = ((id (*)(id, SEL))objc_msgSend)(glyph, NSSelectorFromString(@"size"));
-    id result = sized ? sized(28) : nil;
+    id result = sized ? sized(XHSNativeConfig.shared.tabIconSize) : nil;
     if (![result respondsToSelector:NSSelectorFromString(@"image")]) return nil;
     UIImage *image = ((id (*)(id, SEL))objc_msgSend)(result, NSSelectorFromString(@"image"));
     return [image isKindOfClass:UIImage.class] ? [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] : nil;
@@ -442,7 +386,9 @@ static NSArray<NSArray *> *glassBars(void) {
     NSDictionary *theme = @{@"index": @"home", @"shopping": @"store", @"message": @"chat", @"me": @"me"};
     NSDictionary *symbols = @{@"index": @"house", @"shopping": @"bag", @"message": @"message", @"me": @"person"};
     UIImage *image = [self themeIcon:[theme[name] stringByAppendingString:selected ? @"_f" : @"_b"]];
-    return image ?: [UIImage systemImageNamed:selected ? [symbols[name] stringByAppendingString:@".fill"] : symbols[name]];
+    if (image) return image;
+    UIImageSymbolConfiguration *sym = [UIImageSymbolConfiguration configurationWithPointSize:round(XHSNativeConfig.shared.tabIconSize * 0.72) weight:UIImageSymbolWeightMedium];
+    return [UIImage systemImageNamed:(selected ? [symbols[name] stringByAppendingString:@".fill"] : symbols[name]) withConfiguration:sym];
 }
 
 #pragma mark - 底栏
@@ -504,7 +450,8 @@ static NSArray<NSArray *> *glassBars(void) {
         NSUInteger index = [config.pageNames indexOfObject:name];
         if (index == NSNotFound || [config isTabHidden:name]) continue;
         UIViewController *page = config.pages[index];
-        UITab *tab = [[tabClass alloc] initWithTitle:@"" image:[self tabIcon:name selected:NO] identifier:name viewControllerProvider:^UIViewController *(UITab *t) { return page; }];
+        NSString *title = config.isTabTitleShown ? tabTitles()[name] : @"";
+        UITab *tab = [[tabClass alloc] initWithTitle:title image:[self tabIcon:name selected:NO] identifier:name viewControllerProvider:^UIViewController *(UITab *t) { return page; }];
         if ([tab respondsToSelector:@selector(setSelectedImage:)]) [(id)tab setSelectedImage:[self tabIcon:name selected:YES]];
         NSUInteger badgeIndex = [legacyNames indexOfObject:name];
         tab.badgeValue = (legacyNames && badgeIndex != NSNotFound) ? controller.badgeValueDict[@(badgeIndex)] : [self tabNamed:name].badgeValue;
@@ -532,6 +479,7 @@ static NSArray<NSArray *> *glassBars(void) {
         if (!item.enabled && [self isItemEnabled:item]) item.enabled = YES;
         if (item.badgeValue) [self refreshBadge:item];
     }
+    [XHSNativeLegacy applyTabBarTitleFont:controller.tabBar];
     // 旧栏保留给发布和角标使用。其他插件可能在布局时重新显示它。
     if ([self tabNamed:@"index"]) controller.customtabBar.alpha = 0;
     UITab *restored = selected ? [self tabNamed:selected] : nil;
@@ -600,7 +548,7 @@ static NSArray<NSArray *> *glassBars(void) {
 
 #pragma mark - 首页顶栏
 
-static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlassKey, kHomeFadeKey, kSegmentGlassKey;
+static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlassKey, kHomeFadeKey, kSegmentGlassKey, kChannelTitlesKey, kRenamedTitlesKey, kLineHiddenKey;
 
 + (NSHashTable *)pinnedEdgeEffects {
     static NSHashTable *table;
@@ -640,9 +588,12 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
 
 // 告诉系统顶栏压在这个列表上，边缘效果才会按顶栏的高度铺开。同一时刻只跟当前在看的那个列表
 + (void)attachHomeBar:(UIScrollView *)list {
-    if (![XHSNativeLegacy isLiquidGlassOS]) return;
     UIView *bar = XHSNativeConfig.shared.homeBar;
     if (!bar || ![self isList:list underBar:bar]) return;
+    if (![XHSNativeLegacy isLiquidGlassOS]) {
+        [XHSNativeLegacy attachScrollView:list toBar:bar];
+        return;
+    }
     [self useSoftTopEdge:list];
     id interaction = objc_getAssociatedObject(bar, &kBarEdgeKey);
     if (!interaction) {
@@ -690,11 +641,17 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
     }
 }
 
+// 发布是不是在底栏：用户对调了，或者是折叠屏。折叠屏上小红书自己接管系统底栏，带发布、不带搜索
++ (BOOL)isPublishInTabBar {
+    XYTabbarController *controller = XHSNativeConfig.shared.tabBarController;
+    return XHSNativeConfig.shared.isPublishSwapped || ([controller respondsToSelector:@selector(useLiquidGlass)] && [controller useLiquidGlass]);
+}
+
 + (void)layoutHomeBar:(XYMHomeNaviBar *)bar {
     XHSNativeConfig.shared.homeBar = bar;
     [self stripBarBackground:bar];
     if (![XHSNativeLegacy isLiquidGlassOS]) {
-        [XHSNativeLegacy applySoftEdgeFadeOn:bar key:&kHomeFadeKey fromTop:YES extraHeight:16];
+        [XHSNativeLegacy applySoftEdgeFadeOn:bar key:&kHomeFadeKey fromTop:YES extraHeight:10];
         [XHSNativeLegacy extendHomeFeedUnderNaviBar:bar];
     }
 
@@ -709,8 +666,8 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
     if (!menu || !search) return;
     XHSNativeConfig.shared.searchButton = (UIControl *)search;
 
-    if (XHSNativeConfig.shared.isPublishSwapped) {
-        // 发布去了底栏，原来的搜索留在顶栏。之前收起过的话放出来
+    if ([self isPublishInTabBar]) {
+        // 发布在底栏，原来的搜索留在顶栏。之前收起过的话放出来
         if (publish) {
             [publish removeFromSuperview];
             objc_setAssociatedObject(bar, &kPublishKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -721,7 +678,9 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
             }
         }
         if (![XHSNativeLegacy isLiquidGlassOS]) {
-            [self plateOn:bar key:&kPublishGlassKey below:search frame:search.hidden ? CGRectZero : search.frame bar:kXHSNativeBarHome];
+            BOOL visible = [self isVisible:search];
+            UIView *plate = [self plateOn:bar key:&kPublishGlassKey below:search frame:visible ? search.frame : CGRectZero bar:kXHSNativeBarHome];
+            if (plate) plate.alpha = search.alpha;
         }
     } else {
         if (!publish) {
@@ -742,7 +701,9 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
         if (publish.superview != bar) [bar addSubview:publish];
         if (!CGRectEqualToRect(publish.frame, search.frame)) publish.frame = search.frame;
         if (![XHSNativeLegacy isLiquidGlassOS]) {
-            [self plateOn:bar key:&kPublishGlassKey below:publish frame:publish.hidden ? CGRectZero : publish.frame bar:kXHSNativeBarHome];
+            BOOL visible = [self isVisible:publish];
+            UIView *plate = [self plateOn:bar key:&kPublishGlassKey below:publish frame:visible ? publish.frame : CGRectZero bar:kXHSNativeBarHome];
+            if (plate) plate.alpha = publish.alpha;
         }
         // 原搜索按钮和它背后那块玻璃都收起来（玻璃是和按钮同一位置的另一个视图）
         for (UIView *view in bar.subviews) {
@@ -760,10 +721,13 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
             }
         }
         CGRect menuCircle = CGRectMake(round(iconCenter.x - 22), round(iconCenter.y - 22), 44, 44);
-        [self plateOn:bar key:&kMenuGlassKey below:menu frame:menu.hidden ? CGRectZero : menuCircle bar:kXHSNativeBarHome];
+        BOOL visible = [self isVisible:menu];
+        UIView *plate = [self plateOn:bar key:&kMenuGlassKey below:menu frame:visible ? menuCircle : CGRectZero bar:kXHSNativeBarHome];
+        if (plate) plate.alpha = menu.alpha;
     }
 
     if (!segment) return;
+    [self customizeChannels:segment];
     // 「关注 发现 同城」垫一块玻璃，文字压在图片上才看得清；高度和两侧按钮对齐，在两个按钮之间居中
     CGFloat left = CGRectGetMaxX(menu.frame) + 8, right = CGRectGetMinX(search.frame) - 8;
     CGFloat width = MIN(right - left, CGRectGetWidth(segment.frame) + 16);
@@ -775,16 +739,54 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
     CGFloat segY = [XHSNativeLegacy isLiquidGlassOS] ? CGRectGetMinY(menu.frame) : (CGRectGetMidY(menu.frame) - 22);
     CGRect plate = segment.hidden ? CGRectZero : CGRectMake(x, segY, width, segH);
     [self plateOn:bar key:&kSegmentGlassKey below:segment frame:plate bar:kXHSNativeBarHome];
+    if (![XHSNativeLegacy isLiquidGlassOS]) [self attachVisibleList];
+}
+
+// 首页顶栏的频道：自定义名称用控件自己的 setTitles:，红线用 setSelectionIndicatorHidden:。
+// 标题和 childViewModels 一一对应，按频道编号改，不看文字。改之前的标题记下来，关掉开关时换回去；
+// 小红书自己换了标题（比如定位到了新城市）就以它的为准
++ (void)customizeChannels:(UIView *)segment {
+    XHSNativeConfig *config = XHSNativeConfig.shared;
+    BOOL hideLine = config.isChannelLineHidden;
+    if (hideLine || objc_getAssociatedObject(segment, &kLineHiddenKey)) {
+        if ([[segment valueForKey:@"selectionIndicatorHidden"] boolValue] != hideLine) [(id)segment setSelectionIndicatorHidden:hideLine];
+        objc_setAssociatedObject(segment, &kLineHiddenKey, hideLine ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    NSArray *titles = [segment valueForKey:@"titles"];
+    NSArray *renamed = objc_getAssociatedObject(segment, &kRenamedTitlesKey);
+    NSArray *original = [titles isEqualToArray:renamed] ? objc_getAssociatedObject(segment, &kChannelTitlesKey) : titles;
+    UIResponder *home = segment;
+    while (home && ![home isKindOfClass:objc_getClass("XYMHomeViewController")]) home = home.nextResponder;
+    NSArray *children = [[(XYMHomeViewController *)home dataSource] childViewModels];
+    if (!original || children.count != original.count) return;
+
+    NSMutableArray *wanted = [original mutableCopy];
+    for (NSUInteger i = 0; i < children.count; i++) {
+        if (![children[i] respondsToSelector:@selector(childVCPageName)]) continue;
+        NSString *name = [config nameForChannel:[children[i] childVCPageName]];
+        if (name) wanted[i] = name;
+    }
+    objc_setAssociatedObject(segment, &kChannelTitlesKey, original, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(segment, &kRenamedTitlesKey, wanted, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    if (![titles isEqualToArray:wanted]) [(id)segment setTitles:wanted];
 }
 
 // 首页的频道页（关注 发现 同城）都由 childViewModels 提供，标题、分页、按频道找下标都从这里取，
-// 在这一处过滤就能整个藏掉。全藏了就不过滤
+// 在这一处过滤就能整个藏掉，排序也在这里。全藏了就不过滤
 + (NSArray *)visibleChannels:(NSArray *)children {
     XHSNativeConfig *config = XHSNativeConfig.shared;
     NSMutableArray *visible = [NSMutableArray array];
     for (id child in children)
         if (![child respondsToSelector:@selector(childVCPageName)] || ![config isChannelHidden:[child childVCPageName]]) [visible addObject:child];
-    return visible.count ? visible : children;
+    if (!visible.count) visible = [children mutableCopy];
+    NSArray<NSNumber *> *order = config.channelOrder;
+    [visible sortWithOptions:NSSortStable usingComparator:^NSComparisonResult(id a, id b) {
+        NSUInteger first = [a respondsToSelector:@selector(childVCPageName)] ? [order indexOfObject:@([a childVCPageName])] : NSNotFound;
+        NSUInteger second = [b respondsToSelector:@selector(childVCPageName)] ? [order indexOfObject:@([b childVCPageName])] : NSNotFound;
+        return first < second ? NSOrderedAscending : (first > second ? NSOrderedDescending : NSOrderedSame);
+    }];
+    return visible;
 }
 
 // 默认打开的频道被藏了，就打开剩下的第一个
@@ -799,6 +801,12 @@ static char kBarEdgeKey, kSoftEdgeKey, kPublishKey, kPublishGlassKey, kMenuGlass
 + (NSString *)leftEntranceType:(NSString *)type {
     if (!XHSNativeConfig.shared.isDotsDisabled || ![type isEqualToString:@"DOT"]) return type;
     return @"SETTING";
+}
+
+// 入口按侧边栏菜单处理时，服务器配的图标还是点点的那张，不让顶栏再去套它
++ (BOOL)keepsMenuIcon {
+    if (!XHSNativeConfig.shared.isDotsDisabled) return NO;
+    return [[[objc_getClass("XYHomeModule.MainFrameEntranceConfigManager") shared] leftSideBarType] isEqualToString:@"SETTING"];
 }
 
 #pragma mark - 滚动联动
@@ -890,12 +898,28 @@ static void extendDown(UIView *parent, UIView *root, CGFloat gap, int depth) {
 // 正文延伸到上下两条栏的后面，栏的底色去掉，控件悬浮在玻璃胶囊上。
 // 顶栏两块：返回 + 头像 + 昵称 / 关注 + 分享；底栏一块：评论框 + 点赞收藏评论。
 
-static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteBottomRightKey, kNoteEdgeKey, kNoteTopFadeKey;
+static char kNoteLeftKey, kNoteRightKey, kNoteBottomKey, kNoteBottomRightKey, kNoteEdgeKey;
 
 // 不算位移的 frame（frame 会把 transform 算进去）
 static CGRect layoutFrame(UIView *view) {
     CGSize size = view.bounds.size;
     return CGRectMake(view.center.x - size.width / 2, view.center.y - size.height / 2, size.width, size.height);
+}
+
+// 一组按钮里看得见的内容占的范围（在这组自己的坐标里）。栈里可能留着不显示的位置，
+// 按钮也可能比里面的图标和数字宽，按整组的宽度垫玻璃会一边空出一截
+static CGRect visibleSpan(UIView *group) {
+    CGRect span = CGRectNull;
+    for (UIView *button in group.subviews) {
+        if (button.hidden || button.alpha < 0.01 || CGRectIsEmpty(button.bounds)) continue;
+        CGRect frame = layoutFrame(button), content = CGRectNull;
+        for (UIView *view in button.subviews) {
+            BOOL shown = !view.hidden && view.alpha > 0.01 && !CGRectIsEmpty(view.bounds);
+            if (shown && ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class])) content = CGRectUnion(content, layoutFrame(view));
+        }
+        span = CGRectUnion(span, CGRectIsNull(content) ? frame : CGRectOffset(content, CGRectGetMinX(frame), CGRectGetMinY(frame)));
+    }
+    return CGRectIsNull(span) ? group.bounds : span;
 }
 
 static void setOffset(UIView *view, CGFloat x, CGFloat y) {
@@ -914,6 +938,7 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
     if (!row) return;
     [self clearBackground:row];
     if (![XHSNativeLegacy isLiquidGlassOS]) {
+        static char kNoteTopFadeKey;
         [XHSNativeLegacy applySoftEdgeFadeOn:bar key:&kNoteTopFadeKey fromTop:YES extraHeight:14];
     }
 
@@ -987,9 +1012,9 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
     setOffset(stack, 0, y + height / 2 - CGRectGetMidY(row));
 
     CGRect left = CGRectMake(margin, y, width - margin * 2, height), right = CGRectZero;
+    CGRect span = buttons ? visibleSpan(buttons) : CGRectZero;
     if (fieldGroup && buttons) {
-        CGRect group = layoutFrame(buttons);
-        right = CGRectMake(width - margin - CGRectGetWidth(group) - padding * 2, y, CGRectGetWidth(group) + padding * 2, height);
+        right = CGRectMake(width - margin - CGRectGetWidth(span) - padding * 2, y, CGRectGetWidth(span) + padding * 2, height);
         left.size.width = CGRectGetMinX(right) - gap - margin;
         if (CGRectGetWidth(left) < 80) {
             // 数字太长放不下两块，退回一整条
@@ -997,21 +1022,34 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
             right = CGRectZero;
         }
     }
+    CAGradientLayer *fade = (CAGradientLayer *)fieldGroup.layer.mask;
     if (CGRectIsEmpty(right)) {
         setOffset(fieldGroup, 0, 0);
         setOffset(buttons, 0, 0);
+        fieldGroup.layer.mask = nil;
     } else {
         setOffset(fieldGroup, margin + 6 - CGRectGetMinX(row) - CGRectGetMinX(layoutFrame(fieldGroup)), 0);
-        setOffset(buttons, CGRectGetMaxX(right) - padding - CGRectGetMinX(row) - CGRectGetMaxX(layoutFrame(buttons)), 0);
-    }
-    // 玻璃底板实际插在 content 里，关联宿主用 content 而不是 bar；同时清掉残留玻璃视图，防止重建后多层叠加
-    UIView *leftGlass = [self plateOn:content key:&kNoteBottomKey below:stack frame:left bar:kXHSNativeBarNoteBottom];
-    UIView *rightGlass = [self plateOn:content key:&kNoteBottomRightKey below:stack frame:right bar:kXHSNativeBarNoteBottom];
-    for (UIView *view in [content.subviews copy]) {
-        if (view != leftGlass && view != rightGlass && [XHSNativeLegacy isGlassView:view]) {
-            [view removeFromSuperview];
+        setOffset(buttons, CGRectGetMaxX(right) - padding - CGRectGetMinX(row) - CGRectGetMinX(layoutFrame(buttons)) - CGRectGetMaxX(span), 0);
+        // 评论框还是原来的宽度，比胶囊宽。提示语长的时候（比如英文界面）会伸到右边那块上，超出胶囊的部分渐隐掉
+        if (![fade isKindOfClass:CAGradientLayer.class]) {
+            fade = [CAGradientLayer layer];
+            fade.startPoint = CGPointMake(0, 0.5);
+            fade.endPoint = CGPointMake(1, 0.5);
+            fade.colors = @[(id)UIColor.blackColor.CGColor, (id)UIColor.blackColor.CGColor, (id)UIColor.clearColor.CGColor];
+            fieldGroup.layer.mask = fade;
+        }
+        CGRect visible = CGRectMake(0, 0, CGRectGetMaxX(left) - 2 - (margin + 6), CGRectGetHeight(fieldGroup.bounds));
+        if (!CGRectEqualToRect(fade.frame, visible)) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            fade.frame = visible;
+            fade.locations = @[@0, @(1 - 8 / CGRectGetWidth(visible)), @1];
+            [CATransaction commit];
         }
     }
+    // 玻璃记在它所在的那层上：这一层会被小红书拿到别的笔记页里接着用，记在外层的话每开一篇就多垫一块
+    [self plateOn:content key:&kNoteBottomKey below:stack frame:left bar:kXHSNativeBarNoteBottom];
+    [self plateOn:content key:&kNoteBottomRightKey below:stack frame:right bar:kXHSNativeBarNoteBottom];
     if (![XHSNativeLegacy isLiquidGlassOS]) {
         [XHSNativeLegacy adjustNoteBottomInStack:stack];
     }
@@ -1064,6 +1102,7 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
 
     [self layoutNoteTop:top];
     [self layoutNoteBottom:bottom];
+    if (![XHSNativeLegacy isLiquidGlassOS]) [XHSNativeLegacy attachScrollView:list toBar:top];
 }
 
 // 「头像 昵称 关注 分享」这一条是贴着安全区摆的，上面把栏高记进安全区之后它会被推到栏外，
@@ -1083,44 +1122,51 @@ static void setOffset(UIView *view, CGFloat x, CGFloat y) {
     }
 }
 
-// 双击图片：用小红书自己的双指放大，见 XHSNativePinchHold
-+ (void)toggleZoomInBrowser:(UIView *)browser {
-    if (gPinchHold) return [gPinchHold finish];
-    id controller = [browser respondsToSelector:@selector(pinchController)] ? [browser pinchController] : nil;
-    if (![controller respondsToSelector:@selector(didReceivePinchWithRecognizer:)] || ![controller installed] || [controller inTransform]) return;
-    UIWindow *window = browser.window;
-    UIGestureRecognizer *real = [controller recognizer];
-    if (!window || !real.view) return;
-
-    XHSNativePinchHold *hold = [XHSNativePinchHold new];
-    hold.controller = controller;
-    hold.pinch = [[XHSNativeFakePinch alloc] initWithTarget:nil action:nil];
-    hold.pinch.hostView = real.view;
-    hold.pinch.fakeScale = 1;
-    // 以点按的位置为中心放大
+// 双击笔记里的图片：和单击一样进小红书的大图，再放大到点的位置。
+// 大图里的双击放大是小红书自带的（实验开关，见 hook），所以进去以后再双击就缩回
++ (void)openGalleryZoomedFrom:(UIView *)browser {
+    if (![browser respondsToSelector:@selector(handleWithMultiGesture:)]) return;
+    UIView *image = [browser respondsToSelector:@selector(currentImageView)] ? [browser currentImageView] : nil;
     id tap = [browser respondsToSelector:@selector(multiRegesture)] ? [browser multiRegesture] : nil;
-    hold.pinch.fakePoint = [tap isKindOfClass:UIGestureRecognizer.class] ? [(UIGestureRecognizer *)tap locationInView:nil]
-                                                                        : [browser convertPoint:CGPointMake(CGRectGetMidX(browser.bounds), CGRectGetMidY(browser.bounds)) toView:nil];
-    // 开始时它从自己的 recognizer 取位置和手指数，先换成假的
-    [controller setRecognizer:hold.pinch];
-    [hold send:UIGestureRecognizerStateBegan];
-    [controller setRecognizer:real];
-    if (![controller inTransform]) return;
-
-    UIView *catcher = [[UIView alloc] initWithFrame:window.bounds];
-    catcher.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [catcher addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:hold action:@selector(pan:)]];
-    [catcher addGestureRecognizer:[[UIPinchGestureRecognizer alloc] initWithTarget:hold action:@selector(zoom:)]];
-    [catcher addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:hold action:@selector(finish)]];
-    [window addSubview:catcher];
-    hold.catcher = catcher;
-    hold.link = [CADisplayLink displayLinkWithTarget:hold selector:@selector(grow:)];
-    [hold.link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-    gPinchHold = hold;
+    CGPoint unit = CGPointMake(0.5, 0.5);
+    if ([image isKindOfClass:UIView.class] && [tap isKindOfClass:UIGestureRecognizer.class] && !CGRectIsEmpty(image.bounds)) {
+        CGPoint point = [(UIGestureRecognizer *)tap locationInView:image];
+        unit = CGPointMake(MAX(0, MIN(1, point.x / CGRectGetWidth(image.bounds))), MAX(0, MIN(1, point.y / CGRectGetHeight(image.bounds))));
+    }
+    [browser handleWithMultiGesture:[XHSNativeSingleTap new]];
+    [self zoomGalleryIn:browser.window at:unit tries:40];
 }
 
-+ (void)resetZoom {
-    [gPinchHold finish];
+// 大图是带转场出来的：转场期间它的列表是藏着的，这时候设缩放会被冲掉。等它露出来再放大
++ (void)zoomGalleryIn:(UIWindow *)window at:(CGPoint)unit tries:(NSInteger)tries {
+    UIScrollView *scroll = [self galleryScrollViewIn:window];
+    UIView *image = [scroll.delegate respondsToSelector:@selector(viewForZoomingInScrollView:)] ? [scroll.delegate viewForZoomingInScrollView:scroll] : nil;
+    BOOL ready = image && !CGRectIsEmpty(image.bounds);
+    for (UIView *view = scroll; view && ready; view = view.superview) ready = !view.hidden && view.alpha > 0.01;
+    if (!ready) {
+        if (tries > 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self zoomGalleryIn:window at:unit tries:tries - 1];
+        });
+        return;
+    }
+    CGFloat scale = MIN(2, scroll.maximumZoomScale);  // 和它自己双击放大的倍数一样
+    CGSize size = CGSizeMake(CGRectGetWidth(scroll.bounds) / scale, CGRectGetHeight(scroll.bounds) / scale);
+    CGPoint center = CGPointMake(unit.x * CGRectGetWidth(image.bounds), unit.y * CGRectGetHeight(image.bounds));
+    [scroll zoomToRect:CGRectMake(center.x - size.width / 2, center.y - size.height / 2, size.width, size.height) animated:YES];
+}
+
+// 大图当前这一页的缩放视图
++ (UIScrollView *)galleryScrollViewIn:(UIView *)view {
+    if ([view isKindOfClass:UIScrollView.class] && [NSStringFromClass(view.superview.class) containsString:@"GalleryItemView"]) {
+        UIScrollView *scroll = (UIScrollView *)view;
+        CGRect frame = [scroll convertRect:scroll.bounds toView:nil];
+        if (scroll.maximumZoomScale > 1 && fabs(CGRectGetMinX(frame)) < 1) return scroll;
+    }
+    for (UIView *subview in view.subviews) {
+        UIScrollView *scroll = [self galleryScrollViewIn:subview];
+        if (scroll) return scroll;
+    }
+    return nil;
 }
 
 #pragma mark - 视频页
@@ -1200,6 +1246,9 @@ static void darken(UIView *glass) {
     for (NSString *name in config.tabOrder) [order addObject:tabTitles()[name]];
     [rows addObject:row(@"arrow", with(rowTitle(@"标签顺序"), @"setTrailing", [order componentsJoinedByString:@" "]), @"order")];
     [rows addObject:switchRow(@"滚动时收起", [config boolForKey:kXHSNativeMinimize], [@"pref." stringByAppendingString:kXHSNativeMinimize])];
+    [rows addObject:switchRow(@"显示底栏文字", config.isTabTitleShown, [@"pref." stringByAppendingString:kXHSNativeTabTitles])];
+    NSString *sizeSummary = [NSString stringWithFormat:@"%.0f / %.1f", config.tabIconSize, config.tabTitleSize];
+    [rows addObject:row(@"arrow", with(rowTitle(@"图标与文字大小"), @"setTrailing", sizeSummary), @"tabSize")];
     [rows addObject:switchRow(@"交换搜索与发布", config.isPublishSwapped, [@"pref." stringByAppendingString:kXHSNativeSwapPublish])];
     [rows addObject:gap(8)];
     [rows addObject:row(@"label", rowTitle(@"交换后，发布在底栏右侧，搜索回到首页顶栏。"), @"tabs.note")];
@@ -1207,19 +1256,28 @@ static void darken(UIView *glass) {
 
     [rows addObject:row(@"label", rowTitle(@"首页频道"), @"channels.heading")];
     [rows addObject:gap(8)];
-    NSArray *channels = @[@"关注", @"发现", @"同城"];
+    NSArray *channels = channelTitles();
     for (NSUInteger page = 0; page < channels.count; page++)
         [rows addObject:switchRow(channels[page], ![config isChannelHidden:page], [NSString stringWithFormat:@"channel.%lu", (unsigned long)page])];
+    NSMutableArray<NSString *> *channelOrder = [NSMutableArray array];
+    for (NSNumber *page in config.channelOrder) [channelOrder addObject:channels[page.unsignedIntegerValue]];
+    NSMutableArray<NSString *> *channelNames = [NSMutableArray array];
+    for (NSUInteger page = 0; page < channels.count; page++) [channelNames addObject:[config nameForChannel:page] ?: channels[page]];
+    [rows addObject:row(@"arrow", with(rowTitle(@"频道名称"), @"setTrailing", [channelNames componentsJoinedByString:@" "]), @"channelNames")];
+    [rows addObject:row(@"arrow", with(rowTitle(@"频道顺序"), @"setTrailing", [channelOrder componentsJoinedByString:@" "]), @"channelOrder")];
+    [rows addObject:switchRow(@"隐藏频道红线", config.isChannelLineHidden, [@"pref." stringByAppendingString:kXHSNativeHideChannelLine])];
     [rows addObject:gap(8)];
-    [rows addObject:row(@"label", rowTitle(@"重启小红书后生效。"), @"channels.note")];
+    [rows addObject:row(@"label", rowTitle(@"频道的显示和顺序重启小红书后生效。"), @"channels.note")];
     [rows addObject:gap(24)];
 
     [rows addObject:row(@"label", rowTitle(@"功能"), @"features.heading")];
     [rows addObject:gap(8)];
+    [rows addObject:switchRow(@"无水印保存", config.isNoWatermarkEnabled, [@"pref." stringByAppendingString:kXHSNativeNoWatermark])];
     [rows addObject:switchRow(@"禁用点点 AI", config.isDotsDisabled, [@"pref." stringByAppendingString:kXHSNativeDisableDots])];
     [rows addObject:switchRow(@"双击放大图片", config.isDoubleTapZoomEnabled, [@"pref." stringByAppendingString:kXHSNativeDoubleTapZoom])];
+    [rows addObject:switchRow(@"解除保存限制", config.isSaveRestrictionIgnored, [@"pref." stringByAppendingString:kXHSNativeIgnoreNoSave])];
     [rows addObject:gap(8)];
-    [rows addObject:row(@"label", rowTitle(@"禁用点点 AI 后重启小红书生效。\n双击放大的图片，再双击缩回。"), @"features.note")];
+    [rows addObject:row(@"label", rowTitle(@"禁用点点 AI 后重启小红书生效。\n双击放大的图片，再双击缩回。\n解除保存限制后，作者关闭了保存的笔记也能保存。"), @"features.note")];
     [rows addObject:gap(24)];
 
     [rows addObject:row(@"label", rowTitle(@"液态玻璃"), @"glass.heading")];
@@ -1228,7 +1286,7 @@ static void darken(UIView *glass) {
         ? @[@[@"视频", kXHSNativeGlassVideo], @[@"搜索栏", kXHSNativeGlassSearch], @[@"图文笔记", kXHSNativeGlassNote],
             @[@"消息顶栏", kXHSNativeGlassMessages], @[@"评论输入栏", kXHSNativeGlassComments],
             @[@"私聊输入栏", kXHSNativeGlassChat], @[@"个人页顶栏", kXHSNativeGlassProfile]]
-        : @[@[@"视频", kXHSNativeGlassVideo], @[@"图文笔记", kXHSNativeGlassNote],
+        : @[@[@"视频", kXHSNativeGlassVideo], @[@"搜索栏", kXHSNativeGlassSearch], @[@"图文笔记", kXHSNativeGlassNote],
             @[@"评论输入栏", kXHSNativeGlassComments], @[@"个人页顶栏", kXHSNativeGlassProfile]];
     for (NSArray *option in glassOptions)
         [rows addObject:switchRow(option[0], [config boolForKey:option[1]], [@"pref." stringByAppendingString:option[1]])];
@@ -1251,11 +1309,71 @@ static void darken(UIView *glass) {
     return rows;
 }
 
-+ (NSArray *)orderRows {
++ (NSArray *)rowsForMode:(NSString *)mode {
+    if (!mode) return [self settingsRows];
+    if ([self isOrderMode:mode]) return [self orderRowsForMode:mode];
+    if ([mode isEqualToString:@"channelNames"]) return [self channelNameRows];
+    if ([mode isEqualToString:@"tabSize"]) return @[gap(12), row(@"button", rowTitle(@"恢复默认大小"), @"resetTabSize")];
+    return [self percentRowsForBar:mode];
+}
+
+// 频道名称：点一行弹输入框，留空恢复小红书原来的名字
++ (NSArray *)channelNameRows {
+    NSMutableArray *rows = [NSMutableArray arrayWithObject:gap(12)];
+    XHSNativeConfig *config = XHSNativeConfig.shared;
+    for (NSUInteger page = 0; page < channelTitles().count; page++)
+        [rows addObject:row(@"arrow", with(rowTitle(channelTitles()[page]), @"setTrailing", [config nameForChannel:page] ?: @""), [NSString stringWithFormat:@"name.%lu", (unsigned long)page])];
+    [rows addObject:gap(8)];
+    [rows addObject:row(@"label", rowTitle(@"留空恢复原来的名字。"), @"note")];
+    return rows;
+}
+
++ (void)renameChannel:(NSUInteger)page onPage:(XHSNativeSettingsPage *)settings {
+    NSString *original = channelTitles()[page];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"「%@」的名称", original] message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = [XHSNativeConfig.shared nameForChannel:page];
+        field.placeholder = original;
+        field.clearButtonMode = UITextFieldViewModeWhileEditing;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController *weakAlert = alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *name = [weakAlert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        [XHSNativeConfig.shared setName:name forChannel:page];
+        [XHSNativeHelper applySettings];
+        [settings reloadRows];
+    }]];
+    [settings presentViewController:alert animated:YES completion:nil];
+}
+
+// 拖动排序的页面：order 是底栏标签，channelOrder 是首页频道
++ (BOOL)isOrderMode:(NSString *)mode {
+    return [mode isEqualToString:@"order"] || [mode isEqualToString:@"channelOrder"];
+}
+
++ (NSArray *)orderRowsForMode:(NSString *)mode {
     NSMutableArray *rows = [NSMutableArray array];
+    if ([mode isEqualToString:@"channelOrder"]) {
+        for (NSNumber *page in XHSNativeConfig.shared.channelOrder)
+            [rows addObject:withFlag(row(@"text", rowTitle(channelTitles()[page.unsignedIntegerValue]), page.stringValue), @"setCornerMaskUsesCellBounds", YES)];
+        return rows;
+    }
     for (NSString *name in XHSNativeConfig.shared.tabOrder)
         [rows addObject:withFlag(row(@"text", rowTitle(tabTitles()[name]), name), @"setCornerMaskUsesCellBounds", YES)];
     return rows;
+}
+
++ (void)moveOrderInMode:(NSString *)mode from:(NSUInteger)from to:(NSUInteger)to {
+    XHSNativeConfig *config = XHSNativeConfig.shared;
+    BOOL channels = [mode isEqualToString:@"channelOrder"];
+    NSMutableArray *order = [(channels ? config.channelOrder : config.tabOrder) mutableCopy];
+    if (from >= order.count || to >= order.count) return;
+    id item = order[from];
+    [order removeObjectAtIndex:from];
+    [order insertObject:item atIndex:to];
+    if (channels) config.channelOrder = order;
+    else config.tabOrder = order;
 }
 
 // 选不透明度：0% 是纯玻璃，越大越不透
@@ -1276,6 +1394,9 @@ static void darken(UIView *glass) {
 + (NSString *)titleForMode:(NSString *)mode {
     if (!mode) return @"XHSNative";
     if ([mode isEqualToString:@"order"]) return @"标签顺序";
+    if ([mode isEqualToString:@"channelOrder"]) return @"频道顺序";
+    if ([mode isEqualToString:@"channelNames"]) return @"频道名称";
+    if ([mode isEqualToString:@"tabSize"]) return @"图标与文字大小";
     if ([mode isEqualToString:@"blur"]) return @"模糊程度";
     for (NSArray *bar in glassBars())
         if ([bar[1] isEqualToString:mode]) return [bar[0] stringByAppendingString:@"不透明度"];
@@ -1311,10 +1432,17 @@ static void darken(UIView *glass) {
 
 + (void)handleTap:(NSString *)identity onPage:(XHSNativeSettingsPage *)page {
     XHSNativeConfig *config = XHSNativeConfig.shared;
-    if ([identity isEqualToString:@"order"] || [identity isEqualToString:@"blur"] || [identity hasPrefix:@"fill."]) {
+    if ([identity hasPrefix:@"name."]) {
+        [self renameChannel:[identity substringFromIndex:5].integerValue onPage:page];
+    } else if ([self isOrderMode:identity] || [identity isEqualToString:@"channelNames"] || [identity isEqualToString:@"tabSize"] || [identity isEqualToString:@"blur"] || [identity hasPrefix:@"fill."]) {
         XHSNativeSettingsPage *next = [[objc_getClass("XHSNativeSettingsPage") alloc] init];
         next.mode = [identity hasPrefix:@"fill."] ? [identity substringFromIndex:5] : identity;
         [page.navigationController pushViewController:next animated:YES];
+    } else if ([identity isEqualToString:@"resetTabSize"]) {
+        config.tabIconSize = 28;
+        config.tabTitleSize = 10;
+        page.tableView.tableHeaderView = [XHSNativeLegacy tabSizeSettingsHeaderWithWidth:CGRectGetWidth(page.tableView.bounds)];
+        [self applySettings];
     } else if ([identity hasPrefix:@"percent."]) {
         double value = [identity substringFromIndex:8].doubleValue;
         if ([page.mode isEqualToString:@"blur"]) [config setBlurPercent:value];
@@ -1339,7 +1467,7 @@ static void darken(UIView *glass) {
 + (void)applySettings {
     [self rebuildTabs];
     [XHSNativeConfig.shared.homeBar setNeedsLayout];
-    if (![XHSNativeLegacy isLiquidGlassOS]) [XHSNativeLegacy refreshAllPlates];
+    if (![XHSNativeLegacy isLiquidGlassOS]) [XHSNativeLegacy applyLegacySettings];
 }
 
 #pragma mark - iOS 27.1 以下

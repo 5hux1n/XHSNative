@@ -1,0 +1,38 @@
+TARGET := iphone:clang:latest:15.0
+THEOS_PACKAGE_SCHEME ?= rootless
+ARCHS = arm64 arm64e
+ifeq ($(THEOS_PACKAGE_SCHEME),)
+TARGET := iphone:clang:latest:14.0
+endif
+
+export DEBUG = 0
+INSTALL_TARGET_PROCESSES = discover
+
+include $(THEOS)/makefiles/common.mk
+
+TWEAK_NAME = XHSNative
+BASE_PACKAGE = com.huamidev.xhsnative
+
+XHSNative_FILES = XHSNative.xm XHSNativeHelper.m XHSNativeConfig.m XHSNativeSave.m XHSNativeViewState.m XHSNativeLegacy.m XHSNativeLegacyHooks.xm Artwork.S
+XHSNative_CFLAGS = -fobjc-arc -w
+XHSNative_STRIP_FLAGS = -x
+XHSNative_FRAMEWORKS = UIKit QuartzCore Photos
+XHSNative_LOGOSFLAGS = -c generator=internal
+
+ifeq ($(THEOS_PACKAGE_SCHEME),roothide)
+XHSNative_LDFLAGS += -Wl,-rpath,@loader_path/.jbroot/Library/Frameworks \
+                     -Wl,-rpath,@loader_path/.jbroot/usr/lib
+endif
+
+before-package::
+ifeq ($(THEOS_PACKAGE_SCHEME),)
+	@sed -i '' -e 's/^Architecture:.*/Architecture: iphoneos-arm/' -e 's/firmware (>= 15.0)/firmware (>= 14.0)/' $(THEOS_STAGING_DIR)/DEBIAN/control
+endif
+ifeq ($(THEOS_PACKAGE_SCHEME),roothide)
+	@sed -i '' 's/^Package:.*/Package: $(BASE_PACKAGE).roothide/; s/^Architecture:.*/Architecture: iphoneos-arm64e/; s/^Name:.*/Name: XHSNative (Roothide)/' $(THEOS_STAGING_DIR)/DEBIAN/control
+endif
+
+include $(THEOS_MAKE_PATH)/tweak.mk
+
+clean::
+	@rm -rf .theos packages dist
